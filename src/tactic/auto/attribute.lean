@@ -22,14 +22,14 @@ meta def attr : user_attribute name_set ℕ :=
 
 namespace attr
 
-meta def declaration_to_rule (decl : name) (penalty : ℕ) : tactic rule :=
+meta def declaration_to_rule (decl : name) (penalty : ℕ) :
+  tactic (rule × indexing_mode) :=
 rule.make_const_apply decl penalty
 
 meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
-rule_set.from_list <$> decls.to_list.mmap (λ decl, do {
+rule_set.from_list <$> decls.to_list.mmap (λ decl, do
   penalty ← attr.get_param decl,
-  declaration_to_rule decl penalty
-})
+  declaration_to_rule decl penalty)
 
 meta def registered_rule_set : tactic rule_set :=
 attr.get_cache >>= declarations_to_rule_set
