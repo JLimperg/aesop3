@@ -193,9 +193,8 @@ meta def replace_rapp (rid : rapp_id) (r : rapp) (t : tree) : tree :=
 meta def with_node' {α} [inhabited α] (id : node_id) (f : node → α) (t : tree) : α :=
 match t.get_node id with
 | some n := f n
-| none := _root_.trace
-    (format! "auto/with_node: internal error: node {id} not found").to_string
-    (arbitrary α)
+| none := undefined_core $
+  (format! "auto/with_node: internal error: node {id} not found").to_string
 end
 
 meta def with_node (id : node_id) (f : node → tree) (t : tree) : tree :=
@@ -219,9 +218,8 @@ ids.filter_map $ λ id, (λ r, (id, r)) <$> t.get_rapp id
 meta def with_rapp' {α} [inhabited α] (id : rapp_id) (f : rapp → α) (t : tree) : α :=
 match t.get_rapp id with
 | some r := f r
-| none := _root_.trace
-    (format! "auto/with_rapp: internal error: rule application {id} not found").to_string
-    (arbitrary α)
+| none := undefined_core $
+  (format! "auto/with_rapp: internal error: rule application {id} not found").to_string
 end
 
 meta def with_rapp (id : rapp_id) (f : rapp → tree) (t : tree) : tree :=
