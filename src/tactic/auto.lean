@@ -18,10 +18,6 @@ TODO:
   solution here is to disallow proof rules from introducing new metas, except
   for those which represent goals. auto could check this at runtime, or elide
   the check for efficiency unless a 'debug mode' is toggled.
-- Search tree representation. Currently, the search tree is entirely implicit.
-  If we want best-first or breadth-first search, we instead need to represent
-  the search tree explicitly. Goals can be represented by metas, per usual. But
-  what about the mvar context?
 - Rule indexing. Currently, we iterate through the list of rules one-by-one,
   which is a tiny bit inefficient.
 -/
@@ -57,24 +53,6 @@ match rb_map.find m a with
 end
 
 end native.rb_lmap
-
-namespace tactic
-
-meta def duplicate_main_goal_mvar : tactic expr := do
-  tgt ← target,
-  mk_meta_var tgt
-
-/-
-`on_duplicated_goals t` runs the tactic `t` on a copy of the current goals. This
-makes sure that `t` does not assign the goal metavariables.
--/
-meta def on_duplicated_goals {α} (t : tactic α) : tactic α := do
-  gs ← get_goals,
-  gs' ← gs.mmap mk_meta_var,
-  set_goals gs',
-  finally t (set_goals gs)
-
-end tactic
 
 namespace format
 
@@ -162,17 +140,17 @@ format.sbracket (_root_.to_fmt r.penalty) ++ format.space ++ r.description
 meta instance : has_to_format rule :=
 ⟨rule.to_fmt⟩
 
-meta def make_apply (e : expr) : tactic rule :=
+meta def make_apply (e : expr) (penalty : ℕ) : tactic rule :=
 pure
   { tac := apply e >> skip,
-    penalty := 0,
+    penalty := penalty,
     description := format! "apply {e}" }
 
-meta def make_const_apply (n : name) : tactic rule := do
+meta def make_const_apply (n : name) (penalty : ℕ) : tactic rule := do
   n ← resolve_constant n,
   pure
     { tac := mk_const n >>= apply >> skip,
-      penalty := 0,
+      penalty := penalty,
       description := format! "apply {n}" }
 
 protected meta def lt (r s : rule) : bool :=
@@ -224,22 +202,28 @@ end rule_set
 
 namespace attr
 
-meta def declaration_to_rule (decl : name) : tactic rule :=
-rule.make_const_apply decl
-
-meta def declarations_to_rule_set (decls : list name) : tactic rule_set :=
-rule_set.from_list <$> decls.mmap declaration_to_rule
+open lean.parser
 
 @[user_attribute]
-meta def attr : user_attribute rule_set unit :=
+meta def attr : user_attribute name_set ℕ :=
 { name := `auto,
   descr := "Registers a definition as a rule for the auto tactic.",
   cache_cfg := {
-    mk_cache := declarations_to_rule_set,
-    dependencies := [] } }
+    mk_cache := pure ∘ name_set.of_list,
+    dependencies := [] },
+  parser := small_nat }
+
+meta def declaration_to_rule (decl : name) (penalty : ℕ) : tactic rule :=
+rule.make_const_apply decl penalty
+
+meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
+rule_set.from_list <$> decls.to_list.mmap (λ decl, do {
+  penalty ← attr.get_param decl,
+  declaration_to_rule decl penalty
+})
 
 meta def registered_rule_set : tactic rule_set :=
-attr.get_cache
+attr.get_cache >>= declarations_to_rule_set
 
 end attr
 
@@ -280,211 +264,318 @@ meta instance : has_to_format node_id :=
 
 end node_id
 
-meta structure rule_application :=
-(applied_rule : rule)
-(proof : expr)
-(subgoals : list node_id)
+@[derive decidable_eq]
+meta structure rapp_id :=
+(to_nat : ℕ)
 
-namespace rule_application
+namespace rapp_id
 
-protected meta def to_tactic_format (r : rule_application) : tactic format := do
-  proof ← pp r.proof,
-  pure $ r.applied_rule.to_fmt ++ format.nested 2 (format.join
-    [ "proof:",
-      format.nested 2 proof,
-      format.line,
-      "subgoal nodes: " ++ to_fmt r.subgoals ])
+protected meta def zero : rapp_id :=
+⟨0⟩
 
-meta instance : has_to_tactic_format rule_application :=
-⟨rule_application.to_tactic_format⟩
+protected meta def succ : rapp_id → rapp_id
+| ⟨n⟩ := ⟨n + 1⟩
 
-end rule_application
+protected meta def one : rapp_id :=
+⟨1⟩
+
+protected meta def lt (n m : rapp_id) : Prop :=
+n.to_nat < m.to_nat
+
+meta instance : has_lt rapp_id :=
+⟨rapp_id.lt⟩
+
+-- Surely there's a less annoying way to write this.
+meta instance : decidable_rel ((<) : rapp_id → rapp_id → Prop) :=
+λ n m, (infer_instance : decidable (n.to_nat < m.to_nat))
+
+protected meta def to_fmt (id : rapp_id) : format :=
+_root_.to_fmt id.to_nat
+
+meta instance : has_to_format rapp_id :=
+⟨rapp_id.to_fmt⟩
+
+end rapp_id
 
 meta structure node :=
+(parent : option rapp_id)
 (goal : expr)
 (num_rules_todo : ℕ)
-(active : list rule_application)
-(proof : option rule_application)
-(unprovable : list rule_application)
-(failed : list rule)
+(rapps : list rapp_id)
+(failed_rapps : list rule)
+(is_proven : bool)
+(is_unprovable : bool)
+(is_irrelevant : bool)
 
 namespace node
 
 protected meta def to_tactic_format (n : node) : tactic format := do
   goal ← format.of_goal n.goal,
-  active ← format.unlines <$> n.active.mmap pp,
-  unprovable ← format.unlines <$> n.unprovable.mmap pp,
-  proof ←
-    match n.proof with
-    | none := pure ("none" : format)
-    | some p := pp p
-    end,
   pure $ format.join
-    [ "goal:",
+    [ format! "parent: {n.parent}\n",
+      "goal:",
       format.nested 2 goal,
       format.line,
-      "number of rules to expand: " ++ to_fmt n.num_rules_todo,
-      format.line,
-      "active rules:",
-      format.nested 2 active,
-      format.line,
-      "proof:",
-      format.nested 2 proof,
-      format.line,
-      "unprovable rules:",
-      format.nested 2 unprovable,
-      format.line,
-      "failed rules:",
-      format.nested 2 $ format.unlines (n.failed.map to_fmt)
-    ]
+      format! "number of rules to expand: {n.num_rules_todo}\n",
+      format! "is proven: {n.is_proven}\n",
+      format! "is unprovable: {n.is_unprovable}\n",
+      format! "is irrelevant: {n.is_irrelevant}\n",
+      format! "successful rule applications: {n.rapps}\n",
+      format! "failed rule applications:",
+      format.nested 2 $ format.unlines (n.failed_rapps.map to_fmt) ]
 
 meta instance : has_to_tactic_format node :=
 ⟨node.to_tactic_format⟩
 
-meta def initial (goal : expr) (num_rules_todo : ℕ) : node :=
-{ goal := goal,
-  num_rules_todo := num_rules_todo,
-  failed := [],
-  active := [],
-  unprovable := [],
-  proof := none }
-
-meta def is_proven (n : node) : bool :=
-n.proof.is_some
-
-meta def is_unprovable (n : node) : bool :=
-n.proof.is_none ∧ n.num_rules_todo = 0 ∧ n.active.is_nil
+meta def is_root (n : node) : bool :=
+n.parent.is_none
 
 meta def is_unknown (n : node) : bool :=
-n.proof.is_none ∧ (n.num_rules_todo > 0 ∨ ¬ n.active.is_nil)
-
-meta def set_proof (proof : rule_application) (n : node) : node :=
-{ proof := some proof, num_rules_todo := 0, ..n }
+¬ n.is_proven ∧ ¬ n.is_unprovable
 
 end node
 
+/- Rule application. -/
+meta structure rapp :=
+(parent : node_id)
+(applied_rule : rule)
+(proof : expr)
+(subgoals : list node_id)
+(is_proven : bool)
+(is_unprovable : bool)
+(is_irrelevant : bool)
+
+namespace rapp
+
+protected meta def to_tactic_format (r : rapp) : tactic format := do
+  proof ← pp r.proof,
+  pure $ format.join
+    [ format! "parent: {r.parent}\n",
+      format! "rule: {r.applied_rule}\n",
+      format! "is proven: {r.is_proven}\n",
+      format! "is unprovable: {r.is_unprovable}\n",
+      format! "is irrelevant: {r.is_irrelevant}\n",
+      "proof:",
+      format.nested 2 proof,
+      format.line,
+      format! "subgoal nodes: {r.subgoals}" ]
+
+meta instance : has_to_tactic_format rapp :=
+⟨rapp.to_tactic_format⟩
+
+end rapp
+
 /-
-Invariant: All the `node_id`s in `children` and `parents` appear in `nodes`.
 Invariant: The root node has ID `node_id.zero`.
+Invariant: Any `node_id` or `rapp_id` referenced in a `node` or `rapp` in the
+tree is contained in `nodes` or `rapps`.
 -/
 meta structure tree :=
 (nodes : rb_map node_id node)
-(parents : rb_map node_id node_id)
+(rapps : rb_map rapp_id rapp)
+(next_node_id : node_id)
+(next_rapp_id : rapp_id)
 
 namespace tree
 
-meta def singleton (n : node) : tree :=
-{ nodes := rb_map.of_list [(node_id.zero, n)],
-  parents := rb_map.mk _ _ }
+meta def empty : tree :=
+{ nodes := rb_map.mk _ _,
+  rapps := rb_map.mk _ _,
+  next_node_id := node_id.zero,
+  next_rapp_id := rapp_id.zero }
 
-meta def contains (id : node_id) (t : tree) : bool :=
-t.nodes.contains id
-
-meta def get (id : node_id) (t : tree) : option node :=
+meta def get_node (id : node_id) (t : tree) : option node :=
 t.nodes.find id
 
-meta def get' (id : node_id) (err_prefix : format) (t : tree) : tactic node :=
-match t.get id with
+meta def get_node' (id : node_id) (err_prefix : format) (t : tree) : tactic node :=
+match t.get_node id with
 | some n := pure n
-| none := fail $ err_prefix ++ format! "node {id} not found"
+| none := fail! "{err_prefix}node {id} not found"
 end
-
-meta def get_parent_id (id : node_id) (t : tree) : option node_id :=
-t.parents.find id
-
-meta def get_parent (id : node_id) (t : tree) : option (node_id × node) := do
-  pid ← t.get_parent_id id,
-  p ← t.get pid,
-  pure (pid, p)
-
-meta def get_ancestor_ids : node_id → tree → list node_id := λ id t,
-match t.get_parent_id id with
-| none := []
-| some parent := parent :: get_ancestor_ids parent t
-end
-
-meta def get_ancestors : node_id → tree → list (node_id × node) := λ id t,
-match t.get_parent id with
-| none := []
-| some p@(parent_id, _) := p :: get_ancestors parent_id t
-end
-
-meta def insert (id : node_id) (n : node) (parent : node_id) (t : tree) : tree :=
-{ nodes := t.nodes.insert id n,
-  parents := t.parents.insert id parent }
 
 /- If the node ID doesn't exist yet, it is added. -/
-meta def replace (id : node_id) (n : node) (t : tree) : tree :=
+meta def replace_node (id : node_id) (n : node) (t : tree) : tree :=
 { nodes := t.nodes.insert id n, ..t }
 
-meta def rule_application_is_proven (r : rule_application) (t : tree) : bool :=
-r.subgoals.all $ λ id, (node.is_proven <$> t.get id).get_or_else ff
+/- If the rapp ID doesn't exist yet, it is added. -/
+meta def replace_rapp (rid : rapp_id) (r : rapp) (t : tree) : tree :=
+{ rapps := t.rapps.insert rid r, ..t }
 
-meta def rule_application_is_unprovable (r : rule_application) (t : tree) : bool :=
-r.subgoals.any $ λ id, (node.is_unprovable <$> t.get id).get_or_else tt
-
-meta def propagate_proof_core : list (node_id × node) → tree → tree
-| [] t := t
-| ((id, n) :: ancestors) t :=
-  if n.is_proven
-    then propagate_proof_core ancestors t
-    else
-      match n.active.find_and_remove (λ r, rule_application_is_proven r t) with
-      | some (r, active) :=
-        let t := t.replace id { proof := r, active := active, ..n } in
-        propagate_proof_core ancestors t
-      | none := t
-      end
-
-meta def propagate_proof (id : node_id) (t : tree) : tree :=
-propagate_proof_core (t.get_ancestors id) t
-
-meta def propagate_unprovability_core :
-  rb_set node_id → node_id → tree → tree × rb_set node_id :=
-λ unprovable_nodes id t,
-let recurse_into_parent : rb_set node_id → tree → tree × rb_set node_id :=
-  λ unprovable t,
-  let unprovable := unprovable.insert id in
-  match t.get_parent id with
-  | some (parent, _) :=
-    propagate_unprovability_core unprovable parent t
-  | none := (t, unprovable)
-  end in
-match t.get id with
-| none := (t, unprovable_nodes)
-| some n :=
-  let (unprovable, active) :=
-    n.active.partition $ λ r, rule_application_is_unprovable r t in
-  let n := { active := active, unprovable := n.unprovable ++ unprovable, ..n } in
-  let t := t.replace id n in
-  if n.is_unprovable
-    then
-      let unprovable_nodes := unprovable_nodes.insert id in
-      match t.get_parent id with
-      | some (parent, _) := propagate_unprovability_core unprovable_nodes parent t
-      | none := (t, unprovable_nodes)
-      end
-    else
-      (t, unprovable_nodes)
+meta def with_node' {α} [inhabited α] (id : node_id) (f : node → α) (t : tree) : α :=
+match t.get_node id with
+| some n := f n
+| none := _root_.trace
+    (format! "auto/with_node: internal error: node {id} not found").to_string
+    (arbitrary α)
 end
 
-meta def propagate_unprovability : node_id → tree → tree × rb_set node_id :=
-propagate_unprovability_core (rb_map.mk _ _)
+meta def with_node (id : node_id) (f : node → tree) (t : tree) : tree :=
+@with_node' _ ⟨t⟩ id f t
+
+meta def modify_node (id : node_id) (f : node → node) (t : tree) : tree :=
+t.with_node id $ λ n, t.replace_node id (f n)
+
+meta def get_rapp (id : rapp_id) (t : tree) : option rapp :=
+t.rapps.find id
+
+meta def get_rapp' (id : rapp_id) (err_prefix : format) (t : tree) : tactic rapp :=
+match t.get_rapp id with
+| some r := pure r
+| none := fail! "{err_prefix}node {id} not found"
+end
+
+meta def get_rapps (ids : list rapp_id) (t : tree) : list (rapp_id × rapp) :=
+ids.filter_map $ λ id, (λ r, (id, r)) <$> t.get_rapp id
+
+meta def with_rapp' {α} [inhabited α] (id : rapp_id) (f : rapp → α) (t : tree) : α :=
+match t.get_rapp id with
+| some r := f r
+| none := _root_.trace
+    (format! "auto/with_rapp: internal error: rule application {id} not found").to_string
+    (arbitrary α)
+end
+
+meta def with_rapp (id : rapp_id) (f : rapp → tree) (t : tree) : tree :=
+@with_rapp' _ ⟨t⟩ id f t
+
+meta def modify_rapp (rid : rapp_id) (f : rapp → rapp) (t : tree) : tree :=
+t.with_rapp rid $ λ r, t.replace_rapp rid (f r)
+
+meta def insert_node (n : node) (t : tree) :
+  node_id × tree :=
+let id := t.next_node_id in
+let t := { nodes := t.nodes.insert id n, next_node_id := id.succ, ..t} in
+match n.parent with
+| none := (id, t)
+| some parent_id :=
+  let t :=
+    t.modify_rapp parent_id $ λ parent,
+      { subgoals := id :: parent.subgoals, ..parent } in
+  (id, t)
+end
+
+meta def insert_rapp (r : rapp) (t : tree) : rapp_id × tree :=
+let rid := t.next_rapp_id in
+let t := { rapps := t.rapps.insert rid r, next_rapp_id := rid.succ, ..t} in
+let t := t.modify_node r.parent $ λ parent,
+  { rapps := rid :: parent.rapps, ..parent } in
+(rid, t)
+
+meta def modify_down (f_node : node_id → node → tree → tree)
+  (f_rapp : rapp_id → rapp → tree → tree) : sum node_id rapp_id → tree → tree
+| (sum.inl id) t :=
+  t.with_node id $ λ n,
+    let t := f_node id n t in
+    n.rapps.foldl (λ t rid, modify_down (sum.inr rid) t) t
+| (sum.inr rid) t :=
+  t.with_rapp rid $ λ r,
+    let t := f_rapp rid r t in
+    r.subgoals.foldl (λ t id, modify_down (sum.inl id) t) t
+
+meta def modify_up (f_node : node_id → node → tree → tree × bool)
+  (f_rapp : rapp_id → rapp → tree → tree × bool) :
+  sum node_id rapp_id → tree → tree
+| (sum.inl id) t :=
+  t.with_node id $ λ n,
+    let (t, continue) := f_node id n t in
+    if continue
+      then
+        match n.parent with
+        | some rid := modify_up (sum.inr rid) t
+        | none := t
+        end
+      else
+        t
+| (sum.inr rid) t :=
+  t.with_rapp rid $ λ r,
+    let (t, continue) := f_rapp rid r t in
+    if continue
+      then modify_up (sum.inl r.parent) t
+      else t
+
+meta def set_irrelevant : sum node_id rapp_id → tree → tree :=
+modify_down
+  (λ id  n t, t.replace_node id  { is_irrelevant := tt, ..n })
+  (λ rid r t, t.replace_rapp rid { is_irrelevant := tt, ..r })
+
+meta def set_node_irrelevant (id : node_id) : tree → tree :=
+set_irrelevant (sum.inl id)
+
+meta def set_rapp_irrelevant (rid : rapp_id) : tree → tree :=
+set_irrelevant (sum.inr rid)
+
+meta def rapp_subgoals_proven (r : rapp) (t : tree) : bool :=
+r.subgoals.all $ λ id, t.with_node' id node.is_proven
+
+meta def set_proven : sum node_id rapp_id → tree → tree :=
+modify_up
+  (λ id  n t, (t.replace_node id { is_proven := tt, ..n }, tt))
+  (λ rid r t,
+    if ¬ t.rapp_subgoals_proven r
+      then (t, ff)
+      else
+        -- Mark rule application as proven.
+        let t := t.replace_rapp rid { is_proven := tt, ..r } in
+        -- Mark siblings of the proven rule application (and their descendants)
+        -- as irrelevant.
+        let t := t.with_node r.parent
+          (λ parent,
+            let siblings := parent.rapps.filter (λ rid', rid' ≠ rid) in
+            siblings.foldl (λ t s, set_rapp_irrelevant s t) t) in
+        (t, tt))
+
+meta def set_node_proven (id : node_id) : tree → tree :=
+set_proven (sum.inl id)
+
+meta def set_rapp_proven (rid : rapp_id) : tree → tree :=
+set_proven (sum.inr rid)
+
+meta def node_has_provable_rapp (n : node) (t : tree) : bool :=
+n.rapps.any $ λ id, t.with_rapp' id $ λ r, ¬ r.is_unprovable
+
+meta def set_unprovable : sum node_id rapp_id → tree → tree :=
+modify_up
+  (λ id n t,
+    if t.node_has_provable_rapp n ∨ n.num_rules_todo > 0
+      then (t, ff)
+      else
+        -- Mark node as unprovable.
+        let t := t.replace_node id { is_unprovable := tt, ..n } in
+        -- Mark siblings of the unprovable node (and their descendants)
+        -- as irrelevant.
+        match n.parent with
+        | none := (t, ff)
+        | some parent_rid :=
+          let t := t.with_rapp parent_rid
+            (λ parent,
+              let siblings := parent.subgoals.filter (λ id', id' ≠ id) in
+              siblings.foldl (λ t s, set_node_irrelevant s t) t) in
+          (t, tt)
+        end)
+  (λ rid r t, (t.replace_rapp rid { is_unprovable := tt, ..r }, tt))
+
+meta def set_node_unprovable (id : node_id) : tree → tree :=
+set_unprovable (sum.inl id)
+
+meta def set_rapp_unprovable (rid : rapp_id) : tree → tree :=
+set_unprovable (sum.inr rid)
 
 meta def root_node_is_proven (t : tree) : bool :=
-(node.is_proven <$> (t.get node_id.zero)).get_or_else ff
+t.with_node' node_id.zero node.is_proven
 
 meta def root_node_is_unprovable (t : tree) : bool :=
-(node.is_unprovable <$> (t.get node_id.zero)).get_or_else ff
+t.with_node' node_id.zero node.is_unprovable
+
+meta def find_proven_rapp (rapps : list rapp_id) (t : tree) : option (rapp_id × rapp) :=
+(t.get_rapps rapps).find $ λ p, p.snd.is_proven
 
 private meta def link_proofs_core : node_id → tree → tactic unit := λ id t, do
-  (some n) ← pure $ t.get id
-    | fail! "auto/link_proofs: internal error: no node with ID {id}",
-  (some p) ← pure $ n.proof
+  n ← t.get_node' id "auto/link_proofs: internal error: ",
+  (some (rid, r)) ← pure $ t.find_proven_rapp n.rapps
     | fail! "auto/link_proofs: internal error: node {id} not proven",
-  p.subgoals.mmap' $ λ subgoal_id, link_proofs_core subgoal_id t,
-  unify n.goal p.proof <|> fail!
-    "auto/link_proofs: internal error: proof of node {id} did not unify with the node goal"
+  r.subgoals.mmap' $ λ subgoal, link_proofs_core subgoal t,
+  unify n.goal r.proof <|> fail!
+    "auto/link_proofs: internal error: proof of rule application {rid} did not unify with the goal of its parent node {id}"
 
 /- Can only be used ONCE after the root node has been proven. -/
 meta def link_proofs : tree → tactic unit :=
@@ -492,54 +583,59 @@ link_proofs_core node_id.zero
 
 /- Only use this after you've called `link_proofs`. -/
 meta def extract_proof (t : tree) : tactic expr := do
-  (some n) ← pure $ t.get node_id.zero
-    | fail "auto/extract_proof: internal error: root node does not exist",
+  n ← t.get_node' node_id.zero
+    "auto/extract_proof: internal error: ",
   instantiate_mvars n.goal
 
-meta def format_node (id : node_id) (n : node) (parent : option node_id) :
-  tactic format := do
+meta def format_node (id : node_id) (n : node) : tactic format := do
   n ← pp n,
   pure $ format.join
     [ "node " ++ to_fmt id,
-      format.nested 2 $ format! "parent: {parent}\n{n}"]
+      format.nested 2 n ]
 
-protected meta def to_tactic_format (t : tree) : tactic format :=
-format.unlines <$> t.nodes.to_list.mmap
-  (λ ⟨id, n⟩, format_node id n (t.get_parent_id id))
+meta def format_rapp (rid : rapp_id) (r : rapp) : tactic format := do
+  r ← pp r,
+  pure $ format.join
+    [ "rule application " ++ to_fmt rid,
+      format.nested 2 r ]
+
+protected meta def to_tactic_format (t : tree) : tactic format := do
+  nodes ← t.nodes.to_list.mmap (function.uncurry format_node),
+  rapps ← t.rapps.to_list.mmap (function.uncurry format_rapp),
+  pure $ format.unlines $ nodes ++ rapps
 
 meta instance : has_to_tactic_format tree :=
 ⟨tree.to_tactic_format⟩
 
 end tree
 
-meta structure unexpanded_node :=
+meta structure unexpanded_rapp :=
 (parent : node_id)
 (rule : rule)
 
-namespace unexpanded_node
+namespace unexpanded_rapp
 
-protected meta def lt (n m : unexpanded_node) : bool :=
+protected meta def lt (n m : unexpanded_rapp) : bool :=
 n.rule.penalty < m.rule.penalty
 
-protected meta def to_fmt (n : unexpanded_node) : format :=
+protected meta def to_fmt (n : unexpanded_rapp) : format :=
 "for node " ++ n.parent.to_fmt ++ ": " ++ n.rule.to_fmt
 
-meta instance : has_to_format unexpanded_node :=
-⟨unexpanded_node.to_fmt⟩
+meta instance : has_to_format unexpanded_rapp :=
+⟨unexpanded_rapp.to_fmt⟩
 
-end unexpanded_node
+end unexpanded_rapp
 
 meta structure state :=
 (search_tree : tree)
-(next_id : node_id)
-(unexpanded_nodes : priority_queue unexpanded_node unexpanded_node.lt)
+(unexpanded_rapps : priority_queue unexpanded_rapp unexpanded_rapp.lt)
 
 namespace state
 
 protected meta def to_tactic_format (s : state) : tactic format := do
   t ← pp s.search_tree,
   let unexpanded :=
-    format.unlines $ s.unexpanded_nodes.to_list.map unexpanded_node.to_fmt,
+    format.unlines $ s.unexpanded_rapps.to_list.map unexpanded_rapp.to_fmt,
   pure $ format.join
     [ "search tree:"
     , format.nested 2 t
@@ -551,19 +647,48 @@ protected meta def to_tactic_format (s : state) : tactic format := do
 meta instance : has_to_tactic_format state :=
 ⟨state.to_tactic_format⟩
 
+meta def empty : state :=
+{ search_tree := tree.empty,
+  unexpanded_rapps := priority_queue.empty }
+
 end state
 
+meta def select_rules (rs : rule_set) (id : node_id) (goal : expr) :
+  tactic (list unexpanded_rapp) := do
+  rules ← with_local_goals' [goal] $ rs.applicable_rules,
+  pure $ rules.map $ λ r, { parent := id, rule := r }
+
+meta def add_node (rs : rule_set) (s : state) (goal : expr)
+  (parent : option rapp_id) : tactic (node_id × state) := do
+  let n : node :=
+    { parent := parent,
+      goal := goal,
+      num_rules_todo := 0,
+      rapps := [],
+      failed_rapps := [],
+      is_proven := ff,
+      is_unprovable := ff,
+      is_irrelevant := ff },
+  let (id, t) := s.search_tree.insert_node n,
+  unexpanded_rapps ← select_rules rs id goal,
+  let t := t.modify_node id $ λ n,
+    { num_rules_todo := unexpanded_rapps.length, ..n },
+  let s : state :=
+    { unexpanded_rapps := s.unexpanded_rapps.insert_list unexpanded_rapps,
+      search_tree := t },
+  pure (id, s)
+
+meta def add_nodes (rs : rule_set) (s : state) (goals : list expr)
+  (parent : rapp_id) : tactic (list node_id × state) :=
+goals.mfoldl
+  (λ ⟨ids, s⟩ goal, do
+    (id, s) ← add_node rs s goal parent,
+    pure (id :: ids, s))
+  ([], s)
+
 meta def initial_state (rs : rule_set) : tactic state := do
-  rules ← rs.applicable_rules,
-  let num_rules_todo := rules.length,
-  let unexpanded_nodes : priority_queue unexpanded_node unexpanded_node.lt :=
-    priority_queue.from_list $ rules.map $ λ r,
-      { parent := node_id.zero, rule := r },
   goal ← get_goal,
-  pure
-    { search_tree := tree.singleton (node.initial goal num_rules_todo),
-      next_id := node_id.one,
-      unexpanded_nodes := unexpanded_nodes }
+  prod.snd <$> add_node rs state.empty goal none
 
 meta def run_rule (goal : expr) (r : rule) : tactic (option (expr × list expr)) :=
 with_local_goals' [goal] $ do
@@ -575,77 +700,56 @@ with_local_goals' [goal] $ do
     subgoals ← get_goals,
     pure (goal', subgoals)
 
-meta def select_rules (rs : rule_set) (id : node_id) (goal : expr) :
-  tactic (list unexpanded_node) := do
-  rules ← with_local_goals' [goal] $ rs.applicable_rules,
-  pure $ rules.map $ λ r, { parent := id, rule := r }
-
-meta def make_node (rs : rule_set) (s : state) (goal : expr) (parent : node_id) :
-  tactic (node_id × state) := do
-  let id := s.next_id,
-  unexpanded_nodes ← select_rules rs id goal,
-  let node := node.initial goal unexpanded_nodes.length,
-  let s : state :=
-    { next_id := id.succ,
-      unexpanded_nodes := s.unexpanded_nodes.insert_list unexpanded_nodes,
-      search_tree := s.search_tree.insert id node parent },
-  pure (id, s)
-
-meta def make_nodes (rs : rule_set) (s : state) (goals : list expr)
-  (parent : node_id) : tactic (list node_id × state) :=
-goals.mfoldl
-  (λ ⟨ids, s⟩ goal, do
-    (id, s) ← make_node rs s goal parent,
-    pure (id :: ids, s))
-  ([], s)
-
-meta def prune_unexpanded_nodes (parents : rb_set node_id) (s : state) : state :=
-let unexpanded_nodes :=
-  s.unexpanded_nodes.filter (λ n, parents.contains n.parent) in
-{ unexpanded_nodes := unexpanded_nodes, ..s }
-
-meta def expand_node (rs : rule_set) (s : state) (n : unexpanded_node) :
+meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
   tactic state := do
-  let t := s.search_tree,
   let parent_id := n.parent,
   let rule := n.rule,
-  (some parent) ← pure $ t.get parent_id
-    | fail "auto/expand_node: internal error: parent of unexpanded node not found",
-  rule_result ← run_rule parent.goal rule,
-  let parent := { num_rules_todo := parent.num_rules_todo - 1, ..parent },
+  let t := s.search_tree.modify_node parent_id $ λ parent,
+    { num_rules_todo := parent.num_rules_todo - 1, ..parent },
+  rule_result ← do {
+    parent ← t.get_node' parent_id "auto/expand/rapp: internal error: ",
+    run_rule parent.goal rule },
   s ← match rule_result with
       | some (prf, []) := do
           -- Rule succeeded and did not generate subgoals, meaning the parent
           -- node is proven.
-          -- 1. Record the proof.
-          let rule_app : rule_application :=
-            { applied_rule := rule, proof := prf, subgoals := [] },
-          let parent := parent.set_proof rule_app,
-          -- 2. Potentially mark ancestor nodes as proven.
-          let t :=
-            (t.replace parent_id parent).propagate_proof parent_id,
+          -- 1. Record the rule application.
+          let r : rapp :=
+            { applied_rule := rule,
+              proof := prf,
+              subgoals := [],
+              parent := parent_id,
+              is_proven := tt,
+              is_unprovable := ff,
+              is_irrelevant := ff },
+          let (rid, t) := t.insert_rapp r,
+          -- 2. Mark parent node, and potentially ancestors, as proven.
+          let t := t.set_node_proven parent_id,
           pure { search_tree := t, ..s }
       | some (prf, subgoals) := do
           -- Rule succeeded and generated subgoals.
-          -- 1. Make nodes for the subgoals.
-          (subgoal_nodes, s) ← make_nodes rs s subgoals parent_id,
+          -- 1. Record the rule application.
+          let r : rapp :=
+            { applied_rule := rule,
+              proof := prf,
+              subgoals := [],
+              parent := parent_id,
+              is_proven := ff,
+              is_unprovable := ff,
+              is_irrelevant := ff },
+          let (rid, t) := t.insert_rapp r,
+          let s := { search_tree := t, ..s },
+          -- 2. Record the subgoals.
+          (_, s) ← add_nodes rs s subgoals rid,
           -- 2. Add an active rule application with the generated subgoals.
-          let rule_app : rule_application :=
-            { applied_rule := rule, proof := prf, subgoals := subgoal_nodes },
-          let parent := { active := rule_app :: parent.active, ..parent },
-          let t := s.search_tree.replace parent_id parent,
-          pure { search_tree := t, ..s }
+          pure s
       | none := do
           -- Rule did not succeed.
           -- 1. Record rule failure.
-          let parent := { failed := n.rule :: parent.failed, ..parent},
-          let t := s.search_tree.replace parent_id parent,
-          -- 2. Mark nodes which have become unprovable.
-          -- TODO When a node becomes unprovable, its siblings become irrelevant.
-          -- We should check whether a rule belongs to a proven or irrelevant
-          -- node when we apply the rule. That's easier than removing exactly
-          -- the right unexpanded nodes.
-          let (t, _) := t.propagate_unprovability parent_id,
+          let t := t.modify_node parent_id $ λ parent,
+            { failed_rapps := rule :: parent.failed_rapps, ..parent },
+          -- 2. Potentially mark parent node (and ancestors) as unprovable.
+          let t := t.set_node_unprovable parent_id,
           pure { search_tree := t, ..s }
       end,
   trace "---------------------------------------------------------------------",
@@ -655,14 +759,16 @@ meta def expand_node (rs : rule_set) (s : state) (n : unexpanded_node) :
 meta def expand (rs : rule_set) (s : state) : tactic (option state) := do
   trace "=====================================================================",
   trace s,
-  some (to_expand, unexpanded_nodes) ← pure s.unexpanded_nodes.pop_min
+  some (to_expand, unexpanded_rapps) ← pure s.unexpanded_rapps.pop_min
     | pure none,
-  let s := { unexpanded_nodes := unexpanded_nodes, ..s },
-  (some parent) ← pure $ s.search_tree.get to_expand.parent
-    | fail "auto/expand: internal error: parent of unexpanded node not found",
-  if parent.is_proven
+  trace "---------------------------------------------------------------------",
+  trace! "expanding for node {to_expand.parent}: {to_expand.rule}",
+  let s := { unexpanded_rapps := unexpanded_rapps, ..s },
+  parent ← s.search_tree.get_node' to_expand.parent
+    "auto/expand: internal error: ",
+  if parent.is_proven ∨ parent.is_unprovable ∨ parent.is_irrelevant
     then pure (some s)
-    else some <$> expand_node rs s to_expand
+    else some <$> expand_rapp rs s to_expand
 
 meta def finish_if_proven (s : state) : tactic bool := do
   tt ← pure $ s.search_tree.root_node_is_proven
@@ -678,7 +784,7 @@ private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
   done ← finish_if_proven s,
   when ¬ done $ do
     (some s) ← expand rs s
-      | fail "auto: failed to prove the goal",
+      | fail "auto: internal error: no more rules to apply but root node is not marked as unprovable",
     search_loop s
 
 meta def search (rs : rule_set) : tactic unit :=
@@ -686,18 +792,6 @@ initial_state rs >>= search_loop rs
 
 meta def auto : tactic unit :=
 attr.registered_rule_set >>= search
-
-/-
-TODO
-
-- Purge unexpanded nodes if a sibling rule is proven: it's unnecessary to
-  explore these rules then. (Sibling rules have an OR relationship.)
-- purge subgoals (and their unexpanded nodes) if a sibling goal is unprovable.
-  The parent rule is then unprovable and the siblings don't need to be explored
-  further. (Sibling goals have an AND relationship.)
-- Instead of actually removing these from unexpanded_nodes, we should check
-  whenever we're popping an unexpanded node. Makes the whole thing less horrible.
--/
 
 end auto
 end tactic
@@ -712,6 +806,16 @@ inductive Even : ℕ → Prop
 | zero : Even 0
 | plus_two {n} : Even n → Even (n + 2)
 
-attribute [auto] Even.zero Even.plus_two
+inductive Odd : ℕ → Prop
+| one : Odd 1
+| plus_two {n} : Odd n → Odd (n + 2)
 
-example : Even 6 := by auto
+inductive EvenOrOdd : ℕ → Prop
+| even {n} : Even n → EvenOrOdd n
+| odd {n} : Odd n → EvenOrOdd n
+
+attribute [auto 10] EvenOrOdd.odd EvenOrOdd.even
+attribute [auto  1] Even.zero Even.plus_two
+attribute [auto  0] Odd.one Odd.plus_two
+
+example : EvenOrOdd 3 := by auto
