@@ -5,6 +5,7 @@ Authors: Jannis Limperg
 -/
 
 import tactic.auto.rule
+import data.int.basic
 
 namespace tactic
 namespace auto
@@ -12,19 +13,19 @@ namespace auto
 open lean.parser
 
 @[user_attribute]
-meta def attr : user_attribute name_set ℕ :=
+meta def attr : user_attribute name_set ℤ :=
 { name := `auto,
   descr := "Registers a definition as a rule for the auto tactic.",
   cache_cfg := {
     mk_cache := pure ∘ name_set.of_list,
     dependencies := [] },
-  parser := small_nat }
+  parser := small_int }
 
 namespace attr
 
-meta def declaration_to_rule (decl : name) (penalty : ℕ) :
+meta def declaration_to_rule (decl : name) (penalty : ℤ) :
   tactic (rule × indexing_mode) :=
-rule.make_const_apply decl penalty
+rule.apply_const decl (priority.regular penalty)
 
 meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
 rule_set.from_list <$> decls.to_list.mmap (λ decl, do

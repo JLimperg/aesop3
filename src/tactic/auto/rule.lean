@@ -24,17 +24,43 @@ meta inductive indexing_mode : Type
 
 export indexing_mode (unindexed index_target_head)
 
+/-! ## Rule Priorities -/
+
+meta inductive priority : Type
+| normalization (penalty : ℤ)
+| regular (penalty : ℤ)
+
+namespace priority
+
+protected meta def to_fmt : priority → format
+| (normalization p) := "n" ++ to_string p
+| (regular p) := to_string p
+
+meta instance : has_to_format priority :=
+⟨priority.to_fmt⟩
+
+protected meta def lt : priority → priority → bool
+| (normalization p₁) (normalization p₂) := p₁ < p₂
+| (normalization _) (regular _) := tt
+| (regular _) (normalization _) := ff
+| (regular p₁) (regular p₂) := p₁ < p₂
+
+meta instance : has_lt priority :=
+⟨λ x y, priority.lt x y = tt⟩
+
+end priority
+
 /-! ## Rules -/
 
 meta structure rule :=
-(penalty : ℕ)
+(prio : priority)
 (tac : tactic unit)
 (description : format)
 
 namespace rule
 
 protected meta def to_fmt (r : rule) : format :=
-format.sbracket (_root_.to_fmt r.penalty) ++ format.space ++ r.description
+format! "[{r.prio}] {r.description}"
 
 meta instance : has_to_format rule :=
 ⟨rule.to_fmt⟩
@@ -56,29 +82,32 @@ meta def apply_indexing_mode (type : expr) : tactic indexing_mode := do
 
 /- Note: `e` may not be valid for the context in which this rule is going to be
 applied. -/
-meta def make_apply (e : expr) (penalty : ℕ) : tactic (rule × indexing_mode) := do
+meta def apply (e : expr) (prio : priority) : tactic (rule × indexing_mode) := do
   type ← infer_type e,
   imode ← apply_indexing_mode type,
   let r : rule :=
-    { tac := apply e >> skip,
-      penalty := penalty,
+    { tac := tactic.apply e >> skip,
+      prio := prio,
       description := format! "apply {e}" },
   pure (r, imode)
 
-meta def make_const_apply (n : name) (penalty : ℕ) :
+meta def apply_const (n : name) (prio : priority) :
   tactic (rule × indexing_mode) := do
   n ← resolve_constant n,
   env ← get_env,
   d ← env.get n,
   imode ← apply_indexing_mode d.type,
   let r : rule :=
-    { tac := mk_const n >>= apply >> skip,
-      penalty := penalty,
+    { tac := mk_const n >>= tactic.apply >> skip,
+      prio := prio,
       description := format! "apply {n}" },
   pure (r, imode)
 
 protected meta def lt (r s : rule) : bool :=
-r.penalty < s.penalty
+priority.lt r.prio s.prio
+
+meta instance : has_lt rule :=
+⟨λ r s, rule.lt r s = true⟩
 
 end rule
 
@@ -94,9 +123,8 @@ protected meta def to_fmt (rs : rule_set) : format :=
 format.join
   [ "rules indexed by target head:",
     format.nested 2 $ format.unlines $ rs.target_head_indexed.to_list.map $
-      λ (x : name × list rule),
-        let hd := x.fst in
-        let rules := format.unlines $ x.snd.map _root_.to_fmt in
+      λ ⟨hd, rules⟩,
+        let rules := format.unlines $ rules.map _root_.to_fmt in
         format! "{hd}:{format.nested 2 rules}",
     "unindexed rules:",
     format.nested 2 $ format.unlines $ rs.unindexed.map _root_.to_fmt ]

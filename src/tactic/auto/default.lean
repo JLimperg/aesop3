@@ -34,7 +34,10 @@ meta structure unexpanded_rapp :=
 namespace unexpanded_rapp
 
 protected meta def lt (n m : unexpanded_rapp) : bool :=
-n.rule.penalty < m.rule.penalty
+rule.lt n.rule m.rule
+
+meta instance : has_lt unexpanded_rapp :=
+⟨λ r s, unexpanded_rapp.lt r s = tt⟩
 
 protected meta def to_fmt (n : unexpanded_rapp) : format :=
 "for node " ++ n.parent.to_fmt ++ ": " ++ n.rule.to_fmt

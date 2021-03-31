@@ -62,3 +62,18 @@ meta def set_pretty_name {elab} (n : name) : expr elab → expr elab
 | e := e
 
 end expr
+
+namespace lean
+namespace parser
+
+meta def small_int : parser ℤ := do
+  negate ← succeeds $ tk "-",
+  n ← small_nat,
+  if negate
+    then
+      if n = 0 then pure 0 else pure $ int.neg_succ_of_nat (n - 1)
+    else
+      pure n
+
+end parser
+end lean
