@@ -20,9 +20,8 @@ def find_and_remove {α} (p : α → Prop) [decidable_pred p] :
 
 end list
 
-namespace native.rb_lmap
-
-open native
+namespace native
+namespace rb_lmap
 
 meta def insert_list {α β} (m : rb_lmap α β) (a : α) (bs : list β) : rb_lmap α β :=
 match rb_map.find m a with
@@ -30,7 +29,8 @@ match rb_map.find m a with
 | some bs' := rb_map.insert m a (bs ++ bs')
 end
 
-end native.rb_lmap
+end rb_lmap
+end native
 
 namespace format
 
@@ -50,3 +50,15 @@ if e.is_mvar
   else pp e
 
 end format
+
+namespace expr
+
+meta def set_pretty_name {elab} (n : name) : expr elab → expr elab
+| (mvar unique _ type) := mvar unique n type
+| (local_const unique _ bi type) := local_const unique n bi type
+| (lam _ bi type body) := lam n bi type body
+| (pi _ bi type body) := pi n bi type body
+| (elet _ type assignment body) := elet n type assignment body
+| e := e
+
+end expr

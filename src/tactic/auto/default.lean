@@ -20,8 +20,6 @@ TODO:
   solution here is to disallow proof rules from introducing new metas, except
   for those which represent goals. auto could check this at runtime, or elide
   the check for efficiency unless a 'debug mode' is toggled.
-- Rule indexing. Currently, we iterate through the list of rules one-by-one,
-  which is a tiny bit inefficient.
 -/
 
 namespace tactic
@@ -84,19 +82,20 @@ meta def select_rules (rs : rule_set) (id : node_id) (goal : expr) :
 
 meta def add_node (rs : rule_set) (s : state) (goal : expr)
   (parent : option rapp_id) : tactic (node_id × state) := do
+  let id := s.search_tree.next_node_id,
+  -- TODO useless?
+  let goal := goal.set_pretty_name $ mk_simple_name ("n" ++ id.to_fmt.to_string),
+  unexpanded_rapps ← select_rules rs id goal,
   let n : node :=
     { parent := parent,
       goal := goal,
-      num_rules_todo := 0,
+      num_rules_todo := unexpanded_rapps.length,
       rapps := [],
       failed_rapps := [],
       is_proven := ff,
       is_unprovable := ff,
       is_irrelevant := ff },
-  let (id, t) := s.search_tree.insert_node n,
-  unexpanded_rapps ← select_rules rs id goal,
-  let t := t.modify_node id $ λ n,
-    { num_rules_todo := unexpanded_rapps.length, ..n },
+  let (_, t) := s.search_tree.insert_node n,
   let s : state :=
     { unexpanded_rapps := s.unexpanded_rapps.insert_list unexpanded_rapps,
       search_tree := t },
@@ -118,6 +117,12 @@ meta def run_rule (goal : expr) (r : rule) : tactic (option (expr × list expr))
 with_local_goals' [goal] $ do
   tgt ← target,
   goal' ← mk_meta_var tgt,
+  -- TODO useless?
+  let goal' :=
+    match goal.match_mvar with
+    | some (_, n, _) := goal'.set_pretty_name n
+    | none := goal'
+    end,
   set_goals [goal'],
   try_core $ do
     r.tac,
@@ -165,7 +170,6 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           let s := { search_tree := t, ..s },
           -- 2. Record the subgoals.
           (_, s) ← add_nodes rs s subgoals rid,
-          -- 2. Add an active rule application with the generated subgoals.
           pure s
       | none := do
           -- Rule did not succeed.

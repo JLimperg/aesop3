@@ -103,6 +103,7 @@ protected meta def to_tactic_format (n : node) : tactic format := do
       "goal:",
       format.nested 2 goal,
       format.line,
+      format! "goal metavariable: {n.goal.to_raw_fmt}\n", -- TODO remove?
       format! "number of rules to expand: {n.num_rules_todo}\n",
       format! "is proven: {n.is_proven}\n",
       format! "is unprovable: {n.is_unprovable}\n",
