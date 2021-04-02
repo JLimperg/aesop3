@@ -80,7 +80,7 @@ end state
 
 meta def select_rules (rs : rule_set) (id : node_id) (goal : expr) :
   tactic (list unexpanded_rapp) := do
-  rules ← with_local_goals' [goal] $ rs.applicable_rules,
+  rules ← with_local_goals' [goal] $ rs.applicable_regular_rules,
   pure $ rules.map $ λ r, { parent := id, rule := r }
 
 meta def add_node (rs : rule_set) (s : state) (goal : expr)

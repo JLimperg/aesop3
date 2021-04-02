@@ -18,6 +18,22 @@ def find_and_remove {α} (p : α → Prop) [decidable_pred p] :
       (x, as) ← find_and_remove as,
       pure (x, a :: as)
 
+def minimum_by₁ {α} (lt : α → α → Prop) [decidable_rel lt] (a : α)
+  (as : list α) : α :=
+as.foldl (λ a a', if lt a' a then a' else a) a
+
+def minimum_by {α} (lt : α → α → Prop) [decidable_rel lt] : list α → option α
+| [] := none
+| (a :: as) := some $ minimum_by₁ lt a as
+
+def minimum' {α} [has_lt α] [decidable_rel ((<) : α → α → Prop)] :
+  list α → option α :=
+minimum_by (<)
+
+def minimum₁ {α} [has_lt α] [decidable_rel ((<) : α → α → Prop)] :
+  α → list α → α :=
+minimum_by₁ (<)
+
 end list
 
 namespace native

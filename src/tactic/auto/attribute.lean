@@ -24,8 +24,9 @@ meta def attr : user_attribute name_set ℤ :=
 namespace attr
 
 meta def declaration_to_rule (decl : name) (penalty : ℤ) :
-  tactic (rule × indexing_mode) :=
-rule.apply_const decl (priority.regular penalty)
+  tactic (rule × rule_type × indexing_mode) := do
+  (r, imode) ← rule.apply_const decl penalty,
+  pure (r, rule_type.regular, imode)
 
 meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
 rule_set.from_list <$> decls.to_list.mmap (λ decl, do
