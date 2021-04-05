@@ -13,25 +13,25 @@ namespace auto
 open lean.parser
 
 @[user_attribute]
-meta def attr : user_attribute name_set ℤ :=
+meta def attr : user_attribute name_set percent :=
 { name := `auto,
   descr := "Registers a definition as a rule for the auto tactic.",
   cache_cfg := {
     mk_cache := pure ∘ name_set.of_list,
     dependencies := [] },
-  parser := small_int }
+  parser := percent.parser }
 
 namespace attr
 
-meta def declaration_to_rule (decl : name) (penalty : ℤ) :
-  tactic (rule × rule_type × indexing_mode) := do
-  (r, imode) ← rule.apply_const decl penalty,
-  pure (r, rule_type.regular, imode)
+meta def declaration_to_rule (decl : name) (success_probability : percent) :
+  tactic ((normalization_rule ⊕ regular_rule) × indexing_mode) := do
+  (r, imode) ← rule.apply_const decl success_probability,
+  pure (sum.inr r, imode)
 
 meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
 rule_set.from_list <$> decls.to_list.mmap (λ decl, do
-  penalty ← attr.get_param decl,
-  declaration_to_rule decl penalty)
+  success_probability ← attr.get_param decl,
+  declaration_to_rule decl success_probability)
 
 meta def registered_rule_set : tactic rule_set :=
 attr.get_cache >>= declarations_to_rule_set

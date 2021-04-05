@@ -5,6 +5,7 @@ Authors: Jannis Limperg
 -/
 
 import tactic.auto.attribute
+import tactic.auto.percent
 import tactic.auto.priority_queue
 import tactic.auto.tree
 
@@ -20,6 +21,11 @@ TODO:
   solution here is to disallow proof rules from introducing new metas, except
   for those which represent goals. auto could check this at runtime, or elide
   the check for efficiency unless a 'debug mode' is toggled.
+
+- I'd like the goal mvars to have names that reflect the node they belong to,
+  e.g. `n0` for the mvar of node 0. The code contains an attempt to do this, but
+  it seems like the printing functions don't actually use the pretty mvar names
+  at all.
 -/
 
 namespace tactic
@@ -28,19 +34,20 @@ namespace auto
 /-! ## Unexpanded Rule Applications -/
 
 meta structure unexpanded_rapp :=
+(cumulative_success_probability : percent)
 (parent : node_id)
-(rule : rule)
+(rule : regular_rule)
 
 namespace unexpanded_rapp
 
 protected meta def lt (n m : unexpanded_rapp) : bool :=
-rule.lt n.rule m.rule
+n.cumulative_success_probability < m.cumulative_success_probability
 
 meta instance : has_lt unexpanded_rapp :=
 ⟨λ r s, unexpanded_rapp.lt r s = tt⟩
 
 protected meta def to_fmt (n : unexpanded_rapp) : format :=
-"for node " ++ n.parent.to_fmt ++ ": " ++ n.rule.to_fmt
+format! "[{n.cumulative_success_probability}] for node {n.parent}: {n.rule}"
 
 meta instance : has_to_format unexpanded_rapp :=
 ⟨unexpanded_rapp.to_fmt⟩
@@ -78,21 +85,26 @@ end state
 
 /-! ## Best-First Search -/
 
-meta def select_rules (rs : rule_set) (id : node_id) (goal : expr) :
+meta def select_rules (rs : rule_set) (id : node_id)
+  (goal : expr) (node_success_probability : percent) :
   tactic (list unexpanded_rapp) := do
   rules ← with_local_goals' [goal] $ rs.applicable_regular_rules,
-  pure $ rules.map $ λ r, { parent := id, rule := r }
+  pure $ rules.map $ λ r,
+    let p := node_success_probability * r.penalty in
+    { parent := id, rule := r, cumulative_success_probability := p }
 
 meta def add_node (rs : rule_set) (s : state) (goal : expr)
-  (parent : option rapp_id) : tactic (node_id × state) := do
+  (success_probability : percent) (parent : option rapp_id) :
+  tactic (node_id × state) := do
   let id := s.search_tree.next_node_id,
   -- TODO useless?
   let goal := goal.set_pretty_name $ mk_simple_name ("n" ++ id.to_fmt.to_string),
-  unexpanded_rapps ← select_rules rs id goal,
+  unexpanded_rapps ← select_rules rs id goal success_probability,
   let n : node :=
     { parent := parent,
       goal := goal,
       num_rules_todo := unexpanded_rapps.length,
+      cumulative_success_probability := success_probability,
       rapps := [],
       failed_rapps := [],
       is_proven := ff,
@@ -105,18 +117,19 @@ meta def add_node (rs : rule_set) (s : state) (goal : expr)
   pure (id, s)
 
 meta def add_nodes (rs : rule_set) (s : state) (goals : list expr)
-  (parent : rapp_id) : tactic (list node_id × state) :=
+  (success_probability : percent) (parent : rapp_id) :
+  tactic (list node_id × state) :=
 goals.mfoldl
   (λ ⟨ids, s⟩ goal, do
-    (id, s) ← add_node rs s goal parent,
+    (id, s) ← add_node rs s goal success_probability parent,
     pure (id :: ids, s))
   ([], s)
 
 meta def initial_state (rs : rule_set) : tactic state := do
   goal ← get_goal,
-  prod.snd <$> add_node rs state.empty goal none
+  prod.snd <$> add_node rs state.empty goal ⟨100⟩ none
 
-meta def run_rule (goal : expr) (r : rule) : tactic (option (expr × list expr)) :=
+meta def run_rule (goal : expr) (r : regular_rule) : tactic (option (expr × list expr)) :=
 with_local_goals' [goal] $ do
   tgt ← target,
   goal' ← mk_meta_var tgt,
@@ -138,9 +151,10 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
   let rule := n.rule,
   let t := s.search_tree.modify_node parent_id $ λ parent,
     { num_rules_todo := parent.num_rules_todo - 1, ..parent },
-  rule_result ← do {
-    parent ← t.get_node' parent_id "auto/expand/rapp: internal error: ",
-    run_rule parent.goal rule },
+  parent ← t.get_node' parent_id "auto/expand_rapp: internal error: ",
+  rule_result ← run_rule parent.goal rule,
+  let success_probability :=
+    parent.cumulative_success_probability * rule.penalty,
   s ← match rule_result with
       | some (prf, []) := do
           -- Rule succeeded and did not generate subgoals, meaning the parent
@@ -148,6 +162,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           -- 1. Record the rule application.
           let r : rapp :=
             { applied_rule := rule,
+              cumulative_success_probability := success_probability,
               proof := prf,
               subgoals := [],
               parent := parent_id,
@@ -163,6 +178,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           -- 1. Record the rule application.
           let r : rapp :=
             { applied_rule := rule,
+              cumulative_success_probability := success_probability,
               proof := prf,
               subgoals := [],
               parent := parent_id,
@@ -172,7 +188,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           let (rid, t) := t.insert_rapp r,
           let s := { search_tree := t, ..s },
           -- 2. Record the subgoals.
-          (_, s) ← add_nodes rs s subgoals rid,
+          (_, s) ← add_nodes rs s subgoals success_probability rid,
           pure s
       | none := do
           -- Rule did not succeed.
@@ -250,8 +266,7 @@ inductive EvenOrOdd : ℕ → Prop
 | even {n} : Even n → EvenOrOdd n
 | odd {n} : Odd n → EvenOrOdd n
 
-attribute [auto 10] EvenOrOdd.odd EvenOrOdd.even
-attribute [auto  1] Even.zero Even.plus_two
-attribute [auto  0] Odd.one Odd.plus_two
+attribute [auto  50] EvenOrOdd.odd EvenOrOdd.even
+attribute [auto 100] Even.zero Even.plus_two Odd.one Odd.plus_two
 
 example : EvenOrOdd 3 := by auto

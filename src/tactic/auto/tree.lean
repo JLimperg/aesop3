@@ -88,8 +88,9 @@ meta structure node :=
 (parent : option rapp_id)
 (goal : expr)
 (num_rules_todo : ℕ)
+(cumulative_success_probability : percent)
 (rapps : list rapp_id)
-(failed_rapps : list rule)
+(failed_rapps : list regular_rule)
 (is_proven : bool)
 (is_unprovable : bool)
 (is_irrelevant : bool)
@@ -105,6 +106,7 @@ protected meta def to_tactic_format (n : node) : tactic format := do
       format.line,
       format! "goal metavariable: {n.goal.to_raw_fmt}\n", -- TODO remove?
       format! "number of rules to expand: {n.num_rules_todo}\n",
+      format! "cumulative success probability: {n.cumulative_success_probability}\n",
       format! "is proven: {n.is_proven}\n",
       format! "is unprovable: {n.is_unprovable}\n",
       format! "is irrelevant: {n.is_irrelevant}\n",
@@ -128,7 +130,8 @@ end node
 /- Rule application. -/
 meta structure rapp :=
 (parent : node_id)
-(applied_rule : rule)
+(applied_rule : regular_rule)
+(cumulative_success_probability : percent)
 (proof : expr)
 (subgoals : list node_id)
 (is_proven : bool)
@@ -142,6 +145,7 @@ protected meta def to_tactic_format (r : rapp) : tactic format := do
   pure $ format.join
     [ format! "parent: {r.parent}\n",
       format! "rule: {r.applied_rule}\n",
+      format! "cumulative success probability: {r.cumulative_success_probability}\n",
       format! "is proven: {r.is_proven}\n",
       format! "is unprovable: {r.is_unprovable}\n",
       format! "is irrelevant: {r.is_irrelevant}\n",
