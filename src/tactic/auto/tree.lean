@@ -240,9 +240,8 @@ let t := { nodes := t.nodes.insert id n, next_node_id := id.succ, ..t} in
 match n.parent with
 | none := (id, t)
 | some parent_id :=
-  let t :=
-    t.modify_rapp parent_id $ λ parent,
-      { subgoals := id :: parent.subgoals, ..parent } in
+  let t := t.modify_rapp parent_id $ λ parent,
+    { subgoals := id :: parent.subgoals, ..parent } in
   (id, t)
 end
 

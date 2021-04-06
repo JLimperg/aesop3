@@ -5,6 +5,7 @@ Authors: Jannis Limperg
 -/
 
 import data.int.basic
+import data.list.sort
 import tactic.auto.util
 import tactic.auto.percent
 import tactic.core
@@ -125,16 +126,17 @@ rs.foldl (λ rs ⟨r, imode⟩, rs.add r imode) empty
 
 meta def applicable_target_head_indexed_rules (rs : rule_index α) :
   tactic (list α) := do
-  tgt ← target >>= whnf, -- TODO same question as above: do we want to WHNF here?
+  tgt ← target,
   let head := tgt.get_app_fn,
   if ¬ head.is_constant
     then pure []
     else pure $ rs.by_target_head.find head.const_name
 
-meta def applicable_rules (rs : rule_index α) : tactic (list α) := do
+meta def applicable_rules [has_lt α] [decidable_rel ((<) : α → α → Prop)]
+  (rs : rule_index α) : tactic (list α) := do
   rs₁ ← applicable_target_head_indexed_rules rs,
   let rs₂ := rs.unindexed,
-  pure $ rs₁ ++ rs₂
+  pure $ (rs₁ ++ rs₂).qsort (λ r s, r < s)
 
 end rule_index
 
@@ -179,10 +181,9 @@ rs.foldl
     end)
   empty
 
-meta def first_applicable_normalization_rule (rs : rule_set) :
-  tactic (option normalization_rule) :=
-list.minimum' <$> rs.normalization_rules.applicable_rules
--- TODO more efficient impl: move minimisation into rule_index
+meta def applicable_normalization_rules (rs : rule_set) :
+  tactic (list normalization_rule) :=
+rs.normalization_rules.applicable_rules
 
 meta def applicable_regular_rules (rs : rule_set) : tactic (list regular_rule) :=
 rs.regular_rules.applicable_rules
@@ -195,15 +196,14 @@ namespace rule
 
 /-! ### Apply -/
 
-meta def conclusion_head_constant (e : expr) (md : transparency) :
+meta def conclusion_head_constant (e : expr) :
   tactic (option name) := do
-  (_, conclusion) ← open_pis_whnf e md,
-  -- TODO Do we actually want to normalise here? Maybe we want to take the type
-  -- exactly as the user wrote it (or rather, exactly as Lean elaborated it).
-  try_core $ get_app_fn_const_whnf conclusion md
+  (_, conclusion) ← open_pis e,
+  let f := conclusion.get_app_fn,
+  pure $ if f.is_constant then some f.const_name else none
 
 meta def apply_indexing_mode (type : expr) : tactic indexing_mode := do
-  head_constant ← conclusion_head_constant type semireducible,
+  head_constant ← conclusion_head_constant type,
   pure $
     match head_constant with
     | some c := index_target_head c

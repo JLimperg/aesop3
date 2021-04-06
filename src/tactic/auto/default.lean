@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
+import data.list.sort
 import tactic.auto.attribute
 import tactic.auto.percent
 import tactic.auto.priority_queue
@@ -93,13 +94,29 @@ meta def select_rules (rs : rule_set) (id : node_id)
     let p := node_success_probability * r.success_probability in
     { parent := id, rule := r, cumulative_success_probability := p }
 
+meta def normalize_goal (rs : rule_set) (goal : expr) : tactic expr :=
+with_local_goals' [goal] $ do
+  goal_fmt ← format.of_goal goal,
+  trace! "goal before normalization:{format.nested 2 $ goal_fmt}",
+  rs ← rs.applicable_normalization_rules,
+  decorate_ex "auto: normalization failed with error:" $ rs.mmap' (λ r, r.tac),
+  [goal] ← get_goals
+    | fail! "auto: normalization did not produce exactly one subgoal",
+    -- TODO allow simplification to solve the goal
+  goal_fmt ← format.of_goal goal,
+  trace! "goal after normalization:{format.nested 2 $ goal_fmt}",
+  pure goal
+
 meta def add_node (rs : rule_set) (s : state) (goal : expr)
   (success_probability : percent) (parent : option rapp_id) :
   tactic (node_id × state) := do
+  trace! "adding subgoal of rapp {parent}",
+  goal ← normalize_goal rs goal,
   let id := s.search_tree.next_node_id,
   -- TODO useless?
   let goal := goal.set_pretty_name $ mk_simple_name ("n" ++ id.to_fmt.to_string),
   unexpanded_rapps ← select_rules rs id goal success_probability,
+  trace! "adding unexpanded rapps:{format.nested 2 $ format.unlines $ unexpanded_rapps.map to_fmt}",
   let n : node :=
     { parent := parent,
       goal := goal,
@@ -110,6 +127,8 @@ meta def add_node (rs : rule_set) (s : state) (goal : expr)
       is_proven := ff,
       is_unprovable := ff,
       is_irrelevant := ff },
+  n_fmt ← pp n,
+  trace! "adding node:{format.nested 2 $ n_fmt}",
   let (_, t) := s.search_tree.insert_node n,
   let s : state :=
     { unexpanded_rapps := s.unexpanded_rapps.insert_list unexpanded_rapps,
@@ -126,7 +145,8 @@ goals.mfoldl
   ([], s)
 
 meta def initial_state (rs : rule_set) : tactic state := do
-  goal ← get_goal,
+  tgt ← target,
+  goal ← mk_meta_var tgt,
   prod.snd <$> add_node rs state.empty goal ⟨100⟩ none
 
 meta def run_rule (goal : expr) (r : regular_rule) : tactic (option (expr × list expr)) :=
@@ -152,6 +172,8 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
   let t := s.search_tree.modify_node parent_id $ λ parent,
     { num_rules_todo := parent.num_rules_todo - 1, ..parent },
   parent ← t.get_node' parent_id "auto/expand_rapp: internal error: ",
+  parent_fmt ← pp parent,
+  trace! "parent node:{format.nested 2 parent_fmt}",
   rule_result ← run_rule parent.goal rule,
   let success_probability :=
     parent.cumulative_success_probability * rule.success_probability,
@@ -159,6 +181,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
       | some (prf, []) := do
           -- Rule succeeded and did not generate subgoals, meaning the parent
           -- node is proven.
+          trace! "rule solved the goal",
           -- 1. Record the rule application.
           let r : rapp :=
             { applied_rule := rule,
@@ -169,12 +192,15 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
               is_proven := tt,
               is_unprovable := ff,
               is_irrelevant := ff },
+          r_fmt ← pp r,
+          trace! "recording new rapp:{format.nested 2 r_fmt}",
           let (rid, t) := t.insert_rapp r,
           -- 2. Mark parent node, and potentially ancestors, as proven.
           let t := t.set_node_proven parent_id,
           pure { search_tree := t, ..s }
       | some (prf, subgoals) := do
           -- Rule succeeded and generated subgoals.
+          trace! "rule applied successfully",
           -- 1. Record the rule application.
           let r : rapp :=
             { applied_rule := rule,
@@ -185,6 +211,8 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
               is_proven := ff,
               is_unprovable := ff,
               is_irrelevant := ff },
+          r_fmt ← pp r,
+          trace! "recording new rapp:{format.nested 2 r_fmt}",
           let (rid, t) := t.insert_rapp r,
           let s := { search_tree := t, ..s },
           -- 2. Record the subgoals.
@@ -192,6 +220,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           pure s
       | none := do
           -- Rule did not succeed.
+          trace! "rule failed",
           -- 1. Record rule failure.
           let t := t.modify_node parent_id $ λ parent,
             { failed_rapps := rule :: parent.failed_rapps, ..parent },
@@ -199,29 +228,30 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           let t := t.set_node_unprovable parent_id,
           pure { search_tree := t, ..s }
       end,
-  trace "---------------------------------------------------------------------",
-  trace s,
   pure s
 
 meta def expand (rs : rule_set) (s : state) : tactic (option state) := do
   trace "=====================================================================",
-  trace s,
   some (to_expand, unexpanded_rapps) ← pure s.unexpanded_rapps.pop_min
     | pure none,
-  trace "---------------------------------------------------------------------",
-  trace! "expanding for node {to_expand.parent}: {to_expand.rule}",
+  trace! "expanding {to_expand}",
   let s := { unexpanded_rapps := unexpanded_rapps, ..s },
   parent ← s.search_tree.get_node' to_expand.parent
     "auto/expand: internal error: ",
   if parent.is_proven ∨ parent.is_unprovable ∨ parent.is_irrelevant
-    then pure (some s)
+    then do
+      trace! "rapp is irrelevant, skipping",
+      pure (some s)
     else some <$> expand_rapp rs s to_expand
 
 meta def finish_if_proven (s : state) : tactic bool := do
   tt ← pure $ s.search_tree.root_node_is_proven
     | pure ff,
+  trace "=====================================================================",
+  trace! "root node is proven, extracting proof",
   s.search_tree.link_proofs,
   prf ← s.search_tree.extract_proof,
+  goals ← get_goals,
   exact prf,
   pure tt
 
@@ -231,7 +261,7 @@ private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
   done ← finish_if_proven s,
   when ¬ done $ do
     (some s) ← expand rs s
-      | fail "auto: internal error: no more rules to apply but root node is not marked as unprovable",
+      | fail "auto/search_loop: internal error: no more rules to apply but root node is not marked as unprovable",
     search_loop s
 
 meta def search (rs : rule_set) : tactic unit :=
@@ -269,4 +299,8 @@ inductive EvenOrOdd : ℕ → Prop
 attribute [auto  50] EvenOrOdd.odd EvenOrOdd.even
 attribute [auto 100] Even.zero Even.plus_two Odd.one Odd.plus_two
 
-example : EvenOrOdd 3 := by auto
+def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
+
+@[simp] lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
+
+example : even_or_odd 3 := by auto

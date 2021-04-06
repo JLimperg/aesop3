@@ -28,10 +28,24 @@ meta def declaration_to_rule (decl : name) (success_probability : percent) :
   (r, imode) ← rule.apply_const decl success_probability,
   pure (sum.inr r, imode)
 
-meta def declarations_to_rule_set (decls : name_set) : tactic rule_set :=
-rule_set.from_list <$> decls.to_list.mmap (λ decl, do
-  success_probability ← attr.get_param decl,
-  declaration_to_rule decl success_probability)
+-- TODO move somewhere more appropriate
+meta def simp_all_with_default_lemmas : tactic unit := do
+  s ← simp_lemmas.mk_default,
+  simp_all s [] { fail_if_unchanged := ff },
+  pure ()
+
+meta def declarations_to_rule_set (decls : name_set) : tactic rule_set := do
+  regular_rules ← decls.to_list.mmap $ λ decl, do {
+    success_probability ← attr.get_param decl,
+    declaration_to_rule decl success_probability },
+  let simp_rule : normalization_rule :=
+    { penalty := 0,
+      tac := simp_all_with_default_lemmas,
+      description := "simp at *" },
+  let normalization_rules :
+    list ((normalization_rule ⊕ regular_rule) × indexing_mode) :=
+    [(sum.inl simp_rule, indexing_mode.unindexed)],
+  pure $ rule_set.from_list $ regular_rules ++ normalization_rules
 
 meta def registered_rule_set : tactic rule_set :=
 attr.get_cache >>= declarations_to_rule_set
