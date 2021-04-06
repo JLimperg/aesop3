@@ -30,43 +30,71 @@ export indexing_mode (unindexed index_target_head)
 
 /-! ## Rules -/
 
-meta structure rule (α : Type) :=
-(penalty : α)
+meta structure rule :=
 (tac : tactic unit)
 (description : format)
 
 namespace rule
 
-private meta def int_to_format (n : int) : format :=
-to_string n
+protected meta def to_fmt (r : rule) : format :=
+r.description
 
-protected meta def to_fmt [has_to_format α] (r : rule α) : format :=
-format! "[{r.penalty}] {r.description}"
-
-meta instance [has_to_format α] : has_to_format (rule α) :=
+meta instance : has_to_format rule :=
 ⟨rule.to_fmt⟩
-
-protected meta def lt [has_lt α] (r s : rule α) : Prop :=
-r.penalty < s.penalty
-
-meta instance [has_lt α] : has_lt (rule α) :=
-⟨rule.lt⟩
-
-meta instance [has_lt α] [decidable_rel ((<) : α → α → Prop)] :
-  decidable_rel ((<) : rule α → rule α → Prop) :=
-λ r s, (infer_instance : decidable (r.penalty < s.penalty))
 
 end rule
 
-@[reducible] meta def normalization_rule := rule ℤ
+meta structure normalization_rule extends rule :=
+(penalty : ℤ)
 
-@[reducible] meta def regular_rule := rule percent
+namespace normalization_rule
+
+meta def to_fmt (r : normalization_rule) : format :=
+format! "[{r.penalty}] {r.to_rule}"
+
+meta instance : has_to_format normalization_rule :=
+⟨normalization_rule.to_fmt⟩
+
+meta def lt (r s : normalization_rule) : Prop :=
+r.penalty < s.penalty
+
+meta instance : has_lt normalization_rule :=
+⟨normalization_rule.lt⟩
+
+meta instance :
+  decidable_rel ((<) : normalization_rule → normalization_rule → Prop) :=
+λ r s, (infer_instance : decidable (r.penalty < s.penalty))
+
+end normalization_rule
+
+meta structure regular_rule extends rule :=
+(success_probability : percent)
+
+namespace regular_rule
+
+meta def to_fmt (r : regular_rule) : format :=
+format! "[{r.success_probability}] {r.to_rule}"
+
+meta instance : has_to_format regular_rule :=
+⟨regular_rule.to_fmt⟩
+
+meta def lt (r s : regular_rule) : Prop :=
+r.success_probability < s.success_probability
+
+meta instance : has_lt regular_rule :=
+⟨regular_rule.lt⟩
+
+meta instance :
+  decidable_rel ((<) : regular_rule → regular_rule → Prop) :=
+λ r s, (infer_instance : decidable (r.success_probability < s.success_probability))
+
+end regular_rule
 
 /-! ## Rule Indices -/
 
 meta structure rule_index (α : Type) :=
-(by_target_head : rb_lmap name (rule α))
-(unindexed : list (rule α))
+(by_target_head : rb_lmap name α)
+(unindexed : list α)
 
 namespace rule_index
 
@@ -86,24 +114,24 @@ meta instance [has_to_format α] : has_to_format (rule_index α) :=
 meta def empty : rule_index α :=
 ⟨rb_lmap.mk _ _, []⟩
 
-meta def add (r : rule α) : indexing_mode → rule_index α → rule_index α
+meta def add (r : α) : indexing_mode → rule_index α → rule_index α
 | (index_target_head hd) rs :=
   { by_target_head := rs.by_target_head.insert hd r, ..rs }
 | unindexed rs :=
   { unindexed := r :: rs.unindexed, ..rs }
 
-meta def from_list (rs : list (rule α × indexing_mode)) : rule_index α :=
+meta def from_list (rs : list (α × indexing_mode)) : rule_index α :=
 rs.foldl (λ rs ⟨r, imode⟩, rs.add r imode) empty
 
 meta def applicable_target_head_indexed_rules (rs : rule_index α) :
-  tactic (list (rule α)) := do
+  tactic (list α) := do
   tgt ← target >>= whnf, -- TODO same question as above: do we want to WHNF here?
   let head := tgt.get_app_fn,
   if ¬ head.is_constant
     then pure []
     else pure $ rs.by_target_head.find head.const_name
 
-meta def applicable_rules (rs : rule_index α) : tactic (list (rule α)) := do
+meta def applicable_rules (rs : rule_index α) : tactic (list α) := do
   rs₁ ← applicable_target_head_indexed_rules rs,
   let rs₂ := rs.unindexed,
   pure $ rs₁ ++ rs₂
@@ -113,8 +141,8 @@ end rule_index
 /-! ## The Rule Set -/
 
 meta structure rule_set :=
-(normalization_rules : rule_index ℤ)
-(regular_rules : rule_index percent)
+(normalization_rules : rule_index normalization_rule)
+(regular_rules : rule_index regular_rule)
 
 namespace rule_set
 
@@ -188,9 +216,9 @@ meta def apply (e : expr) (success_probability : percent) :
   tactic (regular_rule × indexing_mode) := do
   type ← infer_type e,
   imode ← apply_indexing_mode type,
-  let r : rule percent :=
+  let r : regular_rule :=
     { tac := tactic.apply e >> skip,
-      penalty := success_probability,
+      success_probability := success_probability,
       description := format! "apply {e}" },
   pure (r, imode)
 
@@ -200,9 +228,9 @@ meta def apply_const (n : name) (success_probability : percent) :
   env ← get_env,
   d ← env.get n,
   imode ← apply_indexing_mode d.type,
-  let r : rule percent :=
+  let r : regular_rule :=
     { tac := mk_const n >>= tactic.apply >> skip,
-      penalty := success_probability,
+      success_probability := success_probability,
       description := format! "apply {n}" },
   pure (r, imode)
 

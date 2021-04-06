@@ -90,7 +90,7 @@ meta def select_rules (rs : rule_set) (id : node_id)
   tactic (list unexpanded_rapp) := do
   rules ← with_local_goals' [goal] $ rs.applicable_regular_rules,
   pure $ rules.map $ λ r,
-    let p := node_success_probability * r.penalty in
+    let p := node_success_probability * r.success_probability in
     { parent := id, rule := r, cumulative_success_probability := p }
 
 meta def add_node (rs : rule_set) (s : state) (goal : expr)
@@ -154,7 +154,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
   parent ← t.get_node' parent_id "auto/expand_rapp: internal error: ",
   rule_result ← run_rule parent.goal rule,
   let success_probability :=
-    parent.cumulative_success_probability * rule.penalty,
+    parent.cumulative_success_probability * rule.success_probability,
   s ← match rule_result with
       | some (prf, []) := do
           -- Rule succeeded and did not generate subgoals, meaning the parent
