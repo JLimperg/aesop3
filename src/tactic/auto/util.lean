@@ -69,6 +69,9 @@ end format
 
 namespace expr
 
+meta def format_goal : expr → tactic format :=
+format.of_goal
+
 meta def set_pretty_name {elab} (n : name) : expr elab → expr elab
 | (mvar unique _ type) := mvar unique n type
 | (local_const unique _ bi type) := local_const unique n bi type
