@@ -297,8 +297,10 @@ private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
       | fail "auto/search_loop: internal error: no more rules to apply but root node is not marked as unprovable",
     search_loop s
 
-meta def search (rs : rule_set) : tactic unit :=
-initial_state rs >>= search_loop rs
+meta def search (rs : rule_set) : tactic unit := do
+  trace_rule_set rs,
+  s ← initial_state rs,
+  search_loop rs s
 
 meta def auto : tactic unit :=
 attr.registered_rule_set >>= search

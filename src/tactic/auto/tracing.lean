@@ -8,6 +8,7 @@ import tactic.auto.tree
 
 declare_trace auto.steps
 declare_trace auto.tree
+declare_trace auto.rule_set
 
 variables {α β : Type} [has_to_tactic_format α] [has_to_tactic_format β]
 
@@ -33,6 +34,9 @@ trace "=========================================================================
 
 meta def trace_tree (t : tree) : tactic unit :=
 tactic.trace_nested `auto.tree "auto" "search tree" t
+
+meta def trace_rule_set (rs : rule_set) : tactic unit :=
+tactic.trace_nested `auto.rule_set "auto" "rule set" rs
 
 end auto
 end tactic

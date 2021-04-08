@@ -106,6 +106,7 @@ format.join
       λ ⟨hd, rules⟩,
         let rules := format.unlines $ rules.map _root_.to_fmt in
         format! "{hd}:{format.nested 2 rules}",
+    format.line,
     "unindexed rules:",
     format.nested 2 $ format.unlines $ rs.unindexed.map _root_.to_fmt ]
 
