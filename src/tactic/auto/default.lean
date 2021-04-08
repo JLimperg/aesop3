@@ -42,11 +42,14 @@ meta structure unexpanded_rapp :=
 
 namespace unexpanded_rapp
 
-protected meta def lt (n m : unexpanded_rapp) : bool :=
-n.cumulative_success_probability < m.cumulative_success_probability
+protected meta def lt (r s : unexpanded_rapp) : Prop :=
+r.cumulative_success_probability < s.cumulative_success_probability
 
 meta instance : has_lt unexpanded_rapp :=
-⟨λ r s, unexpanded_rapp.lt r s = tt⟩
+⟨unexpanded_rapp.lt⟩
+
+meta instance : decidable_rel ((<) : unexpanded_rapp → unexpanded_rapp → Prop) :=
+λ r s, (infer_instance : decidable (r.cumulative_success_probability < s.cumulative_success_probability))
 
 protected meta def to_fmt (n : unexpanded_rapp) : format :=
 format! "[{n.cumulative_success_probability}] for node {n.parent}: {n.rule}"
@@ -60,7 +63,7 @@ end unexpanded_rapp
 
 meta structure state :=
 (search_tree : tree)
-(unexpanded_rapps : priority_queue unexpanded_rapp unexpanded_rapp.lt)
+(unexpanded_rapps : priority_queue unexpanded_rapp (λ r s, s < r))
 
 namespace state
 
