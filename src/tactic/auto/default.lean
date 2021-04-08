@@ -95,15 +95,47 @@ meta def select_rules (rs : rule_set) (id : node_id)
     let p := node_success_probability * r.success_probability in
     { parent := id, rule := r, cumulative_success_probability := p }
 
+meta def run_normalization_rule (r : normalization_rule) : tactic unit := do
+  g ← get_goal,
+  let fail_with_context : format → tactic unit := λ err, do {
+    ctx ← pformat! "rule: {r}\ngoal:{format.nested 2 <$> g.format_goal}",
+    fail $ err ++ format.nested 2 ctx
+  },
+  r.tac <|>
+    fail_with_context "auto: normalization rule failed",
+  [_] ← get_goals |
+    fail_with_context "auto: normalization rule did not produce exactly one goal",
+  pure ()
+
+meta def run_normalization_simp (s : simp_lemmas) : tactic unit := do
+  g ← get_goal,
+  simp_all s [] { fail_if_unchanged := ff },
+    -- TODO discharger should be nested auto
+  gs ← get_goals,
+  match gs with
+  | [_] := pure ()
+  | _ := do
+    trace "wtf",
+    initial_goal ← g.format_goal,
+    gs ← format.unlines <$> gs.mmap format.of_goal,
+    fail $
+      ("auto: normalization simp rule produced more than one goal" : format) ++
+      format.nested 2
+        (format! "initial goal:{format.nested 2 initial_goal}" ++
+         format! "goals produced by simp:{format.nested 2 gs}")
+  end
+
 meta def normalize_goal (rs : rule_set) (goal : expr) : tactic expr :=
 with_local_goals' [goal] $ do
   trace $ pformat!
     "goal before normalization:{format.nested 2 <$> goal.format_goal}",
-  rs ← rs.applicable_normalization_rules,
-  decorate_ex "auto: normalization failed with error:" $ rs.mmap' (λ r, r.tac),
-  [goal] ← get_goals
-    | fail! "auto: normalization did not produce exactly one subgoal",
-    -- TODO allow simplification to solve the goal
+  rules ← rs.applicable_normalization_rules,
+  let (pre_simp_rules, post_simp_rules) := rules.partition
+    (λ (r : normalization_rule), r.penalty < 0),
+  pre_simp_rules.mmap' run_normalization_rule,
+  run_normalization_simp rs.normalization_simp_lemmas,
+  post_simp_rules.mmap' run_normalization_rule,
+  goal ← get_goal,
   trace $ pformat!
     "goal after normalization:{format.nested 2 <$> goal.format_goal}",
   pure goal
@@ -298,12 +330,18 @@ inductive EvenOrOdd : ℕ → Prop
 | odd {n} : Odd n → EvenOrOdd n
 
 attribute [auto  50] EvenOrOdd.odd EvenOrOdd.even
-attribute [auto 100] Even.zero Even.plus_two Odd.one Odd.plus_two
+attribute [auto 100] Even.zero Even.plus_two Odd.one
 
 def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
 
-@[simp] lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
+lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
 
-set_option trace.auto true
+@[auto norm 50]
+meta def test_norm_tactic : tactic unit := `[try { simp [even_or_odd_def] at * }]
+
+@[auto 50]
+meta def test_regular_tactic : tactic unit := `[apply Odd.plus_two]
+
+set_option trace.auto.steps true
 
 example : even_or_odd 3 := by auto

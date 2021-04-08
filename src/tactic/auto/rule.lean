@@ -140,46 +140,59 @@ meta def applicable_rules [has_lt α] [decidable_rel ((<) : α → α → Prop)]
 
 end rule_index
 
+/-! ## Rule Set Members -/
+
+meta inductive rule_set_member
+| normalization_rule (r : normalization_rule) (imode : indexing_mode)
+| normalization_simp_lemmas (s : simp_lemmas)
+| regular_rule (r : regular_rule) (imode : indexing_mode)
+
 /-! ## The Rule Set -/
 
 meta structure rule_set :=
 (normalization_rules : rule_index normalization_rule)
+(normalization_simp_lemmas : simp_lemmas)
 (regular_rules : rule_index regular_rule)
 
 namespace rule_set
 
-protected meta def to_fmt (rs : rule_set) : format :=
-format.join
-  [ "normalization rules:",
-    format.nested 2 $ rs.normalization_rules.to_fmt,
-    format.line,
-    "regular rules:",
-    format.nested 2 $ rs.regular_rules.to_fmt ]
+protected meta def to_tactic_format (rs : rule_set) : tactic format := do
+  simp_lemmas_fmt ← pp rs.normalization_simp_lemmas,
+  pure $ format.unlines
+    [ format! "normalization rules:{format.nested 2 $ rs.normalization_rules.to_fmt}",
+      format! "normalization simp lemmas:{format.nested 2 simp_lemmas_fmt}",
+      format! "regular rules:{format.nested 2 $ rs.regular_rules.to_fmt}" ]
 
-meta instance : has_to_format rule_set :=
-⟨rule_set.to_fmt⟩
+meta instance : has_to_tactic_format rule_set :=
+⟨rule_set.to_tactic_format⟩
 
 meta def empty : rule_set :=
 { normalization_rules := rule_index.empty,
+  normalization_simp_lemmas := simp_lemmas.mk,
   regular_rules := rule_index.empty }
 
 meta def add_normalization_rule (r : normalization_rule) (imode : indexing_mode)
   (rs : rule_set) : rule_set :=
 { normalization_rules := rs.normalization_rules.add r imode, ..rs }
 
+meta def add_normalization_simp_lemmas (s : simp_lemmas) (rs : rule_set) :
+  rule_set :=
+{ normalization_simp_lemmas := rs.normalization_simp_lemmas.join s, ..rs }
+
 meta def add_regular_rule (r : regular_rule) (imode : indexing_mode)
   (rs : rule_set) : rule_set :=
 { regular_rules := rs.regular_rules.add r imode, ..rs }
 
-meta def from_list
-  (rs : list ((normalization_rule ⊕ regular_rule) × indexing_mode)) : rule_set :=
-rs.foldl
-  (λ rs ⟨r, imode⟩,
-    match r with
-    | sum.inl r := rs.add_normalization_rule r imode
-    | sum.inr r := rs.add_regular_rule r imode
-    end)
-  empty
+meta def add_rule_set_member : rule_set_member → rule_set → rule_set
+| (rule_set_member.normalization_rule r imode) rs :=
+  rs.add_normalization_rule r imode
+| (rule_set_member.normalization_simp_lemmas s) rs :=
+  rs.add_normalization_simp_lemmas s
+| (rule_set_member.regular_rule r imode) rs :=
+  rs.add_regular_rule r imode
+
+meta def from_list (rs : list rule_set_member) : rule_set :=
+rs.foldl (λ rs r, rs.add_rule_set_member r) empty
 
 meta def applicable_normalization_rules (rs : rule_set) :
   tactic (list normalization_rule) :=
