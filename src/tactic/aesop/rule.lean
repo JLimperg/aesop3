@@ -6,8 +6,8 @@ Authors: Jannis Limperg
 
 import data.int.basic
 import data.list.sort
-import tactic.auto.util
-import tactic.auto.percent
+import tactic.aesop.util
+import tactic.aesop.percent
 import tactic.core
 
 variables {α : Type}
@@ -17,7 +17,7 @@ variables {α : Type}
 -/
 
 namespace tactic
-namespace auto
+namespace aesop
 
 open native
 
@@ -249,5 +249,5 @@ meta def apply_const (n : name) (success_probability : percent) :
   pure (r, imode)
 
 end rule
-end auto
+end aesop
 end tactic

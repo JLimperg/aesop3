@@ -6,7 +6,7 @@ Authors: Jannis Limperg
 
 import tactic.core
 
-namespace tactic.auto
+namespace tactic.aesop
 
 /-
 Invariant: between 0 and 100
@@ -59,4 +59,4 @@ meta def parser : parser percent := do
   end
 
 end percent
-end tactic.auto
+end tactic.aesop

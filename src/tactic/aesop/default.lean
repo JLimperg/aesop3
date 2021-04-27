@@ -5,14 +5,14 @@ Authors: Jannis Limperg
 -/
 
 import data.list.sort
-import tactic.auto.attribute
-import tactic.auto.percent
-import tactic.auto.priority_queue
-import tactic.auto.tracing
-import tactic.auto.tree
+import tactic.aesop.attribute
+import tactic.aesop.percent
+import tactic.aesop.priority_queue
+import tactic.aesop.tracing
+import tactic.aesop.tree
 
 /-!
-# `auto`, a general-purpose proof search tactic
+# Aesop, a general-purpose proof search tactic
 -/
 
 /-
@@ -21,7 +21,7 @@ TODO:
 - Metavariables need to be reset when we switch between branches of the search
   tree. Currently, mvars may leak freely between branches. Maybe the best
   solution here is to disallow proof rules from introducing new metas, except
-  for those which represent goals. auto could check this at runtime, or elide
+  for those which represent goals. Aesop could check this at runtime, or elide
   the check for efficiency unless a 'debug mode' is toggled.
 
 - I'd like the goal mvars to have names that reflect the node they belong to,
@@ -31,7 +31,7 @@ TODO:
 -/
 
 namespace tactic
-namespace auto
+namespace aesop
 
 /-! ## Unexpanded Rule Applications -/
 
@@ -105,15 +105,15 @@ meta def run_normalization_rule (r : normalization_rule) : tactic unit := do
     fail $ err ++ format.nested 2 ctx
   },
   r.tac <|>
-    fail_with_context "auto: normalization rule failed",
+    fail_with_context "aesop: normalization rule failed",
   [_] ← get_goals |
-    fail_with_context "auto: normalization rule did not produce exactly one goal",
+    fail_with_context "aesop: normalization rule did not produce exactly one goal",
   pure ()
 
 meta def run_normalization_simp (s : simp_lemmas) : tactic unit := do
   g ← get_goal,
   simp_all s [] { fail_if_unchanged := ff },
-    -- TODO discharger should be nested auto
+    -- TODO discharger should be nested aesop
   gs ← get_goals,
   match gs with
   | [_] := pure ()
@@ -122,7 +122,7 @@ meta def run_normalization_simp (s : simp_lemmas) : tactic unit := do
     initial_goal ← g.format_goal,
     gs ← format.unlines <$> gs.mmap format.of_goal,
     fail $
-      ("auto: normalization simp rule produced more than one goal" : format) ++
+      ("aesop: normalization simp rule produced more than one goal" : format) ++
       format.nested 2
         (format! "initial goal:{format.nested 2 initial_goal}" ++
          format! "goals produced by simp:{format.nested 2 gs}")
@@ -208,7 +208,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
   let rule := n.rule,
   let t := s.search_tree.modify_node parent_id $ λ parent,
     { num_rules_todo := parent.num_rules_todo - 1, ..parent },
-  parent ← t.get_node' parent_id "auto/expand_rapp: internal error: ",
+  parent ← t.get_node' parent_id "aesop/expand_rapp: internal error: ",
   trace $ pformat! "parent node:{format.nested 2 <$> pp parent}",
   rule_result ← run_rule parent.goal rule,
   let success_probability :=
@@ -274,7 +274,7 @@ meta def expand (rs : rule_set) (s : state) : tactic (option state) := do
   trace $ format! "expanding {to_expand}",
   let s := { unexpanded_rapps := unexpanded_rapps, ..s },
   parent ← s.search_tree.get_node' to_expand.parent
-    "auto/expand: internal error: ",
+    "aesop/expand: internal error: ",
   if parent.is_proven ∨ parent.is_unprovable ∨ parent.is_irrelevant
     then do
       trace "rapp is irrelevant, skipping",
@@ -293,11 +293,11 @@ meta def finish_if_proven (s : state) : tactic bool := do
 
 private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
   ff ← pure $ s.search_tree.root_node_is_unprovable
-    | fail "auto: failed to prove the goal",
+    | fail "aesop: failed to prove the goal",
   done ← finish_if_proven s,
   when ¬ done $ do
     (some s) ← expand rs s
-      | fail "auto/search_loop: internal error: no more rules to apply but root node is not marked as unprovable",
+      | fail "aesop/search_loop: internal error: no more rules to apply but root node is not marked as unprovable",
     search_loop s
 
 meta def search (rs : rule_set) : tactic unit := do
@@ -305,16 +305,16 @@ meta def search (rs : rule_set) : tactic unit := do
   s ← initial_state rs,
   search_loop rs s
 
-meta def auto : tactic unit :=
+meta def aesop : tactic unit :=
 attr.registered_rule_set >>= search
 
-end auto
+end aesop
 
-meta def auto : tactic unit :=
-tactic.auto.auto
+meta def aesop : tactic unit :=
+tactic.aesop.aesop
 
-meta def interactive.auto : tactic unit :=
-tactic.auto.auto
+meta def interactive.aesop : tactic unit :=
+tactic.aesop.aesop
 
 end tactic
 
@@ -334,19 +334,19 @@ inductive EvenOrOdd : ℕ → Prop
 | even {n} : Even n → EvenOrOdd n
 | odd {n} : Odd n → EvenOrOdd n
 
-attribute [auto  50] EvenOrOdd.odd EvenOrOdd.even
-attribute [auto 100] Even.zero Even.plus_two Odd.one
+attribute [aesop  50] EvenOrOdd.odd EvenOrOdd.even
+attribute [aesop 100] Even.zero Even.plus_two Odd.one
 
 def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
 
 lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
 
-@[auto norm 50]
+@[aesop norm 50]
 meta def test_norm_tactic : tactic unit := `[try { simp [even_or_odd_def] at * }]
 
-@[auto 50]
+@[aesop 50]
 meta def test_regular_tactic : tactic unit := `[apply Odd.plus_two]
 
-set_option trace.auto.steps true
+set_option trace.aesop.steps true
 
-example : even_or_odd 3 := by auto
+example : even_or_odd 3 := by aesop

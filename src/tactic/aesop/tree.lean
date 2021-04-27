@@ -4,11 +4,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
-import tactic.auto.rule
-import tactic.auto.util
+import tactic.aesop.rule
+import tactic.aesop.util
 
 namespace tactic
-namespace auto
+namespace aesop
 
 open native
 
@@ -199,7 +199,7 @@ meta def with_node' {α} [inhabited α] (id : node_id) (f : node → α) (t : tr
 match t.get_node id with
 | some n := f n
 | none := undefined_core $
-  (format! "auto/with_node: internal error: node {id} not found").to_string
+  (format! "aesop/with_node: internal error: node {id} not found").to_string
 end
 
 meta def with_node (id : node_id) (f : node → tree) (t : tree) : tree :=
@@ -224,7 +224,7 @@ meta def with_rapp' {α} [inhabited α] (id : rapp_id) (f : rapp → α) (t : tr
 match t.get_rapp id with
 | some r := f r
 | none := undefined_core $
-  (format! "auto/with_rapp: internal error: rule application {id} not found").to_string
+  (format! "aesop/with_rapp: internal error: rule application {id} not found").to_string
 end
 
 meta def with_rapp (id : rapp_id) (f : rapp → tree) (t : tree) : tree :=
@@ -361,12 +361,12 @@ meta def find_proven_rapp (rapps : list rapp_id) (t : tree) : option (rapp_id ×
 (t.get_rapps rapps).find $ λ p, p.snd.is_proven
 
 private meta def link_proofs_core : node_id → tree → tactic unit := λ id t, do
-  n ← t.get_node' id "auto/link_proofs: internal error: ",
+  n ← t.get_node' id "aesop/link_proofs: internal error: ",
   (some (rid, r)) ← pure $ t.find_proven_rapp n.rapps
-    | fail! "auto/link_proofs: internal error: node {id} not proven",
+    | fail! "aesop/link_proofs: internal error: node {id} not proven",
   r.subgoals.mmap' $ λ subgoal, link_proofs_core subgoal t,
   unify n.goal r.proof <|> fail!
-    "auto/link_proofs: internal error: proof of rule application {rid} did not unify with the goal of its parent node {id}"
+    "aesop/link_proofs: internal error: proof of rule application {rid} did not unify with the goal of its parent node {id}"
 
 /- Can only be used ONCE after the root node has been proven. -/
 meta def link_proofs : tree → tactic unit :=
@@ -375,7 +375,7 @@ link_proofs_core node_id.zero
 /- Only use this after you've called `link_proofs`. -/
 meta def extract_proof (t : tree) : tactic expr := do
   n ← t.get_node' node_id.zero
-    "auto/extract_proof: internal error: ",
+    "aesop/extract_proof: internal error: ",
   instantiate_mvars n.goal
 
 meta def format_node (id : node_id) (n : node) : tactic format := do
@@ -400,5 +400,5 @@ meta instance : has_to_tactic_format tree :=
 
 end tree
 
-end auto
+end aesop
 end tactic

@@ -4,11 +4,11 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
-import tactic.auto.rule
+import tactic.aesop.rule
 import data.int.basic
 
 namespace tactic
-namespace auto
+namespace aesop
 
 open lean
 open lean.parser
@@ -49,15 +49,15 @@ meta def parser : lean.parser attr_config := do
   match rule_type with
   | some `norm := normalization <$> normalization_attr_config.parser
   | none := regular <$> regular_attr_config.parser
-  | some n := fail $ format! "unknown auto attribute type: {n}"
+  | some n := fail $ format! "unknown aesop attribute type: {n}"
   end
 
 end attr_config
 
 @[user_attribute]
 meta def attr : user_attribute name_set attr_config :=
-{ name := `auto,
-  descr := "Registers a definition as a rule for the auto tactic.",
+{ name := `aesop,
+  descr := "Registers a definition as a rule for the aesop tactic.",
   cache_cfg := {
     mk_cache := pure ∘ name_set.of_list,
     dependencies := [] },
@@ -79,7 +79,7 @@ meta def normalization_declaration_to_rule (decl : name) (c : normalization_attr
       indexing_mode.unindexed
   | _ := do
     s ← simp_lemmas.mk.add_simp decl <|> fail!
-      "Cannot add {decl} as a norm rule for auto. It must be a (conditional) equation or a tactic.",
+      "Cannot add {decl} as a norm rule for aesop. It must be a (conditional) equation or a tactic.",
     when c.penalty.is_some $ fail!
       "Penalty annotation is not allowed for norm rules that are tactics.",
     pure $ rule_set_member.normalization_simp_lemmas s
@@ -123,5 +123,5 @@ meta def registered_rule_set : tactic rule_set :=
 attr.get_cache >>= declarations_to_rule_set
 
 end attr
-end auto
+end aesop
 end tactic
