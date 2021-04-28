@@ -113,8 +113,8 @@ meta def add_node (s : state) (goal : expr) (success_probability : percent)
       is_proven := ff,
       is_unprovable := ff,
       is_irrelevant := ff },
-  trace $ pformat! "adding node:{format.nested 2 <$> pp n}",
   let (id, t) := s.search_tree.insert_node n,
+  trace $ pformat! "adding node {id}:{format.nested 2 <$> pp n}",
   let an : active_node :=
     { node := id,
       cumulative_success_probability := success_probability },
