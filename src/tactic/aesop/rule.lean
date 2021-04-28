@@ -66,6 +66,9 @@ meta instance :
   decidable_rel ((<) : normalization_rule → normalization_rule → Prop) :=
 λ r s, (infer_instance : decidable (r.penalty < s.penalty))
 
+meta def ltb (r s : normalization_rule) : bool :=
+r < s
+
 end normalization_rule
 
 meta structure regular_rule extends rule :=
@@ -88,6 +91,9 @@ meta instance : has_lt regular_rule :=
 meta instance :
   decidable_rel ((<) : regular_rule → regular_rule → Prop) :=
 λ r s, (infer_instance : decidable (r.success_probability < s.success_probability))
+
+meta def ltb (r s : regular_rule) : bool :=
+r < s
 
 end regular_rule
 

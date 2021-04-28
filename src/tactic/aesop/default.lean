@@ -35,48 +35,49 @@ namespace aesop
 
 /-! ## Unexpanded Rule Applications -/
 
-meta structure unexpanded_rapp :=
+meta structure active_node :=
 (cumulative_success_probability : percent)
-(parent : node_id)
-(rule : regular_rule)
+(node : node_id)
 
-namespace unexpanded_rapp
+namespace active_node
 
-protected meta def lt (r s : unexpanded_rapp) : Prop :=
+protected meta def lt (r s : active_node) : Prop :=
 r.cumulative_success_probability < s.cumulative_success_probability
 
-meta instance : has_lt unexpanded_rapp :=
-⟨unexpanded_rapp.lt⟩
+meta instance : has_lt active_node :=
+⟨active_node.lt⟩
 
-meta instance : decidable_rel ((<) : unexpanded_rapp → unexpanded_rapp → Prop) :=
-λ r s, (infer_instance : decidable (r.cumulative_success_probability < s.cumulative_success_probability))
+meta instance : decidable_rel ((<) : active_node → active_node → Prop) :=
+λ r s,
+  (infer_instance : decidable
+    (r.cumulative_success_probability < s.cumulative_success_probability))
 
-protected meta def to_fmt (n : unexpanded_rapp) : format :=
-format! "[{n.cumulative_success_probability}] for node {n.parent}: {n.rule}"
+protected meta def to_fmt (n : active_node) : format :=
+format! "[{n.cumulative_success_probability}] node {n.node}"
 
-meta instance : has_to_format unexpanded_rapp :=
-⟨unexpanded_rapp.to_fmt⟩
+meta instance : has_to_format active_node :=
+⟨active_node.to_fmt⟩
 
-end unexpanded_rapp
+end active_node
 
 /-! ## Search State -/
 
 meta structure state :=
 (search_tree : tree)
-(unexpanded_rapps : priority_queue unexpanded_rapp (λ r s, s < r))
+(active_nodes : priority_queue active_node (λ r s, r > s))
 
 namespace state
 
 protected meta def to_tactic_format (s : state) : tactic format := do
   t ← pp s.search_tree,
-  let unexpanded :=
-    format.unlines $ s.unexpanded_rapps.to_list.map unexpanded_rapp.to_fmt,
+  let active_nodes :=
+    format.unlines $ s.active_nodes.to_list.map active_node.to_fmt,
   pure $ format.join
     [ "search tree:"
     , format.nested 2 t
     , format.line
-    , "unexpanded nodes:"
-    , format.nested 2 unexpanded
+    , "active nodes:"
+    , format.nested 2 active_nodes
     ]
 
 meta instance : has_to_tactic_format state :=
@@ -84,132 +85,73 @@ meta instance : has_to_tactic_format state :=
 
 meta def empty : state :=
 { search_tree := tree.empty,
-  unexpanded_rapps := priority_queue.empty }
+  active_nodes := priority_queue.empty }
+
+meta def modify_search_tree (f : tree → tree) (s : state) : state :=
+{ search_tree := f s.search_tree, ..s }
+
+meta def modify_active_nodes
+  (f : priority_queue active_node (λ r s, r > s)
+     → priority_queue active_node (λ r s, r > s))
+  (s : state) : state :=
+{ active_nodes := f s.active_nodes, ..s }
 
 end state
 
 /-! ## Best-First Search -/
 
-meta def select_rules (rs : rule_set) (id : node_id)
-  (goal : expr) (node_success_probability : percent) :
-  tactic (list unexpanded_rapp) := do
-  rules ← with_local_goals' [goal] $ rs.applicable_regular_rules,
-  pure $ rules.map $ λ r,
-    let p := node_success_probability * r.success_probability in
-    { parent := id, rule := r, cumulative_success_probability := p }
-
-meta def run_normalization_rule (r : normalization_rule) : tactic unit := do
-  g ← get_goal,
-  let fail_with_context : format → tactic unit := λ err, do {
-    ctx ← pformat! "rule: {r}\ngoal:{format.nested 2 <$> g.format_goal}",
-    fail $ err ++ format.nested 2 ctx
-  },
-  r.tac <|>
-    fail_with_context "aesop: normalization rule failed",
-  [_] ← get_goals |
-    fail_with_context "aesop: normalization rule did not produce exactly one goal",
-  pure ()
-
-meta def run_normalization_simp (s : simp_lemmas) : tactic unit := do
-  g ← get_goal,
-  simp_all s [] { fail_if_unchanged := ff },
-    -- TODO discharger should be nested aesop
-  gs ← get_goals,
-  match gs with
-  | [_] := pure ()
-  | _ := do
-    trace "wtf",
-    initial_goal ← g.format_goal,
-    gs ← format.unlines <$> gs.mmap format.of_goal,
-    fail $
-      ("aesop: normalization simp rule produced more than one goal" : format) ++
-      format.nested 2
-        (format! "initial goal:{format.nested 2 initial_goal}" ++
-         format! "goals produced by simp:{format.nested 2 gs}")
-  end
-
-meta def normalize_goal (rs : rule_set) (goal : expr) : tactic expr :=
-with_local_goals' [goal] $ do
-  trace $ pformat!
-    "goal before normalization:{format.nested 2 <$> goal.format_goal}",
-  rules ← rs.applicable_normalization_rules,
-  let (pre_simp_rules, post_simp_rules) := rules.partition
-    (λ (r : normalization_rule), r.penalty < 0),
-  pre_simp_rules.mmap' run_normalization_rule,
-  run_normalization_simp rs.normalization_simp_lemmas,
-  post_simp_rules.mmap' run_normalization_rule,
-  goal ← get_goal,
-  trace $ pformat!
-    "goal after normalization:{format.nested 2 <$> goal.format_goal}",
-  pure goal
-
-meta def add_node (rs : rule_set) (s : state) (goal : expr)
-  (success_probability : percent) (parent : option rapp_id) :
-  tactic (node_id × state) := do
-  trace $ format! "adding subgoal of rapp {parent}",
-  goal ← normalize_goal rs goal,
-  let id := s.search_tree.next_node_id,
-  -- TODO useless?
-  let goal := goal.set_pretty_name $ mk_simple_name ("n" ++ id.to_fmt.to_string),
-  unexpanded_rapps ← select_rules rs id goal success_probability,
-  trace $ format!
-    "adding unexpanded rapps:{format.nested 2 $ format.unlines $ unexpanded_rapps.map to_fmt}",
+meta def add_node (s : state) (goal : expr) (success_probability : percent)
+  (parent : option rapp_id) : tactic (node_id × state) := do
   let n : node :=
     { parent := parent,
       goal := goal,
-      num_rules_todo := unexpanded_rapps.length,
       cumulative_success_probability := success_probability,
       rapps := [],
       failed_rapps := [],
+      regular_queue := none,
+      is_normal := ff,
       is_proven := ff,
       is_unprovable := ff,
       is_irrelevant := ff },
   trace $ pformat! "adding node:{format.nested 2 <$> pp n}",
-  let (_, t) := s.search_tree.insert_node n,
+  let (id, t) := s.search_tree.insert_node n,
+  let an : active_node :=
+    { node := id,
+      cumulative_success_probability := success_probability },
   let s : state :=
-    { unexpanded_rapps := s.unexpanded_rapps.insert_list unexpanded_rapps,
+    { active_nodes := s.active_nodes.insert an,
       search_tree := t },
   pure (id, s)
 
-meta def add_nodes (rs : rule_set) (s : state) (goals : list expr)
+meta def add_nodes (s : state) (goals : list expr)
   (success_probability : percent) (parent : rapp_id) :
   tactic (list node_id × state) :=
 goals.mfoldl
   (λ ⟨ids, s⟩ goal, do
-    (id, s) ← add_node rs s goal success_probability parent,
+    (id, s) ← add_node s goal success_probability parent,
     pure (id :: ids, s))
   ([], s)
 
-meta def initial_state (rs : rule_set) : tactic state := do
+meta def initial_state : tactic state := do
   trace "setting up initial state",
   tgt ← target,
   goal ← mk_meta_var tgt,
-  prod.snd <$> add_node rs state.empty goal ⟨100⟩ none
+  prod.snd <$> add_node state.empty goal ⟨100⟩ none
 
 meta def run_rule (goal : expr) (r : regular_rule) : tactic (option (expr × list expr)) :=
 with_local_goals' [goal] $ do
   tgt ← target,
   goal' ← mk_meta_var tgt,
-  -- TODO useless?
-  let goal' :=
-    match goal.match_mvar with
-    | some (_, n, _) := goal'.set_pretty_name n
-    | none := goal'
-    end,
   set_goals [goal'],
   try_core $ do
     r.tac,
     subgoals ← get_goals,
     pure (goal', subgoals)
 
-meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
-  tactic state := do
-  let parent_id := n.parent,
-  let rule := n.rule,
-  let t := s.search_tree.modify_node parent_id $ λ parent,
-    { num_rules_todo := parent.num_rules_todo - 1, ..parent },
+meta def apply_regular_rule (s : state) (parent_id : node_id)
+  (rule : regular_rule) : tactic state := do
+  let t := s.search_tree,
   parent ← t.get_node' parent_id "aesop/expand_rapp: internal error: ",
-  trace $ pformat! "parent node:{format.nested 2 <$> pp parent}",
   rule_result ← run_rule parent.goal rule,
   let success_probability :=
     parent.cumulative_success_probability * rule.success_probability,
@@ -228,8 +170,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
               is_proven := tt,
               is_unprovable := ff,
               is_irrelevant := ff },
-          r_fmt ← pp r,
-          trace $ format! "recording new rapp:{format.nested 2 r_fmt}",
+          trace $ pformat! "adding new rule application:{format.nested 2 <$> pp r}",
           let (rid, t) := t.insert_rapp r,
           -- 2. Mark parent node, and potentially ancestors, as proven.
           let t := t.set_node_proven parent_id,
@@ -252,7 +193,7 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
           let (rid, t) := t.insert_rapp r,
           let s := { search_tree := t, ..s },
           -- 2. Record the subgoals.
-          (_, s) ← add_nodes rs s subgoals success_probability rid,
+          (_, s) ← add_nodes s subgoals success_probability rid,
           pure s
       | none := do
           -- Rule did not succeed.
@@ -266,20 +207,101 @@ meta def expand_rapp (rs : rule_set) (s : state) (n : unexpanded_rapp) :
       end,
   pure s
 
-meta def expand (rs : rule_set) (s : state) : tactic (option state) := do
+meta def run_normalization_rule (r : normalization_rule) : tactic unit := do
+  g ← get_goal,
+  let fail_with_context : format → tactic unit := λ err, do {
+    ctx ← pformat! "rule: {r}\ngoal:{format.nested 2 <$> g.format_goal}",
+    fail $ err ++ format.nested 2 ctx
+  },
+  r.tac <|>
+    fail_with_context "aesop: normalization rule failed",
+  [_] ← get_goals |
+    fail_with_context "aesop: normalization rule did not produce exactly one goal",
+  pure ()
+
+meta def run_normalization_simp (s : simp_lemmas) : tactic unit := do
+  g ← get_goal,
+  simp_all s [] { fail_if_unchanged := ff },
+    -- TODO discharger should be nested aesop
+  gs ← get_goals,
+  -- TODO allow normalization to solve the goal
+  match gs with
+  | [_] := pure ()
+  | _ := do
+    initial_goal ← g.format_goal,
+    gs ← format.unlines <$> gs.mmap format.of_goal,
+    fail $
+      ("aesop: normalization simp rule did not produce exactly one goal" : format) ++
+      format.nested 2
+        (format! "initial goal:{format.nested 2 initial_goal}" ++
+         format! "goals produced by simp:{format.nested 2 gs}")
+  end
+
+meta def normalize_goal (rs : rule_set) (goal : expr) : tactic expr :=
+with_local_goals' [goal] $ do
+  trace $ pformat!
+    "goal before normalization:{format.nested 2 <$> goal.format_goal}",
+  rules ← rs.applicable_normalization_rules,
+  let (pre_simp_rules, post_simp_rules) := rules.partition
+    (λ (r : normalization_rule), r.penalty < 0),
+  pre_simp_rules.mmap' run_normalization_rule,
+  run_normalization_simp rs.normalization_simp_lemmas,
+  post_simp_rules.mmap' run_normalization_rule,
+  goal ← get_goal,
+  trace $ pformat!
+    "goal after normalization:{format.nested 2 <$> goal.format_goal}",
+  pure goal
+
+meta def normalize_node_if_necessary (rs : rule_set) (s : state) (id : node_id)
+  (n : node) : tactic node := do
+  ff ← pure n.is_normal | pure n,
+  trace $ format! "normalizing node {id}",
+  goal ← normalize_goal rs n.goal,
+  pure { goal := goal, ..n }
+
+meta def select_rules_if_necessary (rs : rule_set) (s : state) (n : node) :
+  tactic node := do
+  none ← pure n.regular_queue | pure n,
+  rules ← with_local_goals' [n.goal] $ rs.applicable_regular_rules,
+  trace $ format!
+    "applicable rules:{format.nested 2 $ format.unlines $ rules.map to_fmt}",
+  pure { regular_queue := rules, ..n }
+
+meta def apply_first_regular_rule (s : state) (id : node_id) (n : node) :
+  tactic state := do
+  some (rule :: rules) ← pure n.regular_queue | fail!
+    "aesop/expand_node: internal error: node {id} has no applicable rules",
+  trace $ format! "applying rule: {rule}",
+  let s := s.modify_search_tree $ λ t, t.replace_node id { regular_queue := rules, ..n },
+  s ← apply_regular_rule s id rule,
+  pure $
+    if rules.empty
+      then s
+      else s.modify_active_nodes $ λ q, q.insert
+        { node := id,
+          cumulative_success_probability := n.cumulative_success_probability }
+
+meta def expand_node (rs : rule_set) (s : state) (id : node_id) :
+  tactic state := do
+  n ← s.search_tree.get_node' id "aesop/expand_node: internal error: ",
+  n ← normalize_node_if_necessary rs s id n,
+  n ← select_rules_if_necessary rs s n,
+  let s := s.modify_search_tree $ λ t, t.replace_node id n,
+  apply_first_regular_rule s id n
+
+meta def expand (rs : rule_set) (s : state) : tactic state := do
   trace "=====================================================================",
   trace_tree s.search_tree,
-  some (to_expand, unexpanded_rapps) ← pure s.unexpanded_rapps.pop_min
-    | pure none,
-  trace $ format! "expanding {to_expand}",
-  let s := { unexpanded_rapps := unexpanded_rapps, ..s },
-  parent ← s.search_tree.get_node' to_expand.parent
-    "aesop/expand: internal error: ",
-  if parent.is_proven ∨ parent.is_unprovable ∨ parent.is_irrelevant
-    then do
-      trace "rapp is irrelevant, skipping",
-      pure (some s)
-    else some <$> expand_rapp rs s to_expand
+  some (active_node, active_nodes) ← pure s.active_nodes.pop_min
+    | fail "aesop/expand: internal error: no more rules to apply",
+  let id := active_node.node,
+  let s := { active_nodes := active_nodes, ..s },
+  n ← s.search_tree.get_node' id "aesop/expand: internal error: ",
+  trace $ pformat!
+    "expanding node {id} ({active_node.cumulative_success_probability}):{format.nested 2 <$> pp n}",
+  if n.is_proven ∨ n.is_unprovable ∨ n.is_irrelevant
+    then trace "node is proven/unprovable/irrelevant, skipping" >> pure s
+    else expand_node rs s id
 
 meta def finish_if_proven (s : state) : tactic bool := do
   tt ← pure $ s.search_tree.root_node_is_proven
@@ -295,14 +317,11 @@ private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
   ff ← pure $ s.search_tree.root_node_is_unprovable
     | fail "aesop: failed to prove the goal",
   done ← finish_if_proven s,
-  when ¬ done $ do
-    (some s) ← expand rs s
-      | fail "aesop/search_loop: internal error: no more rules to apply but root node is not marked as unprovable",
-    search_loop s
+  when ¬ done $ expand rs s >>= search_loop
 
 meta def search (rs : rule_set) : tactic unit := do
   trace_rule_set rs,
-  s ← initial_state rs,
+  s ← initial_state,
   search_loop rs s
 
 meta def aesop : tactic unit :=

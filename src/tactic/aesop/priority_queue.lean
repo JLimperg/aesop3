@@ -4,6 +4,8 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
+import tactic.aesop.util
+
 structure priority_queue (α : Type*) (lt : α → α → bool) :=
 (queue : list α)
 
@@ -41,5 +43,26 @@ def filter (p : α → Prop) [decidable_pred p] (q : priority_queue α lt) :
 
 def to_list (q : priority_queue α lt) : list α :=
 q.queue
+
+protected meta def to_fmt [has_to_format α] (p : priority_queue α lt) : format :=
+_root_.to_fmt p.queue
+
+meta instance [has_to_format α] : has_to_format (priority_queue α lt) :=
+⟨priority_queue.to_fmt⟩
+
+protected meta def pp [has_to_tactic_format α] (p : priority_queue α lt) :
+  tactic format :=
+tactic.pp p.queue
+
+meta instance [has_to_tactic_format α] :
+  has_to_tactic_format (priority_queue α lt) :=
+⟨priority_queue.pp⟩
+
+meta def to_fmt_lines [has_to_format α] (p : priority_queue α lt) : format :=
+format.unlines $ p.queue.map _root_.to_fmt
+
+meta def pp_lines [has_to_tactic_format α] (p : priority_queue α lt) :
+  tactic format :=
+format.unlines <$> p.queue.mmap tactic.pp
 
 end priority_queue

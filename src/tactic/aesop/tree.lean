@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
+import tactic.aesop.priority_queue
 import tactic.aesop.rule
 import tactic.aesop.util
 
@@ -87,10 +88,11 @@ end rapp_id
 meta structure node :=
 (parent : option rapp_id)
 (goal : expr)
-(num_rules_todo : ℕ)
 (cumulative_success_probability : percent)
 (rapps : list rapp_id)
 (failed_rapps : list regular_rule)
+(regular_queue : option (list regular_rule))
+(is_normal : bool)
 (is_proven : bool)
 (is_unprovable : bool)
 (is_irrelevant : bool)
@@ -99,18 +101,25 @@ namespace node
 
 protected meta def to_tactic_format (n : node) : tactic format := do
   goal ← format.of_goal n.goal,
+  regular_queue ←
+    match n.regular_queue with
+    | some q := format.unlines <$> q.mmap pp
+    | none := pure "<rules not yet selected>"
+    end,
   pure $ format.join
     [ format! "parent: {n.parent}\n",
       "goal:",
       format.nested 2 goal,
       format.line,
-      format! "goal metavariable: {n.goal.to_raw_fmt}\n", -- TODO remove?
-      format! "number of rules to expand: {n.num_rules_todo}\n",
       format! "cumulative success probability: {n.cumulative_success_probability}\n",
+      format! "is normal: {n.is_normal}\n",
       format! "is proven: {n.is_proven}\n",
       format! "is unprovable: {n.is_unprovable}\n",
       format! "is irrelevant: {n.is_irrelevant}\n",
       format! "successful rule applications: {n.rapps}\n",
+      format! "rules waiting to be expanded:",
+      format.nested 2 regular_queue,
+      format.line,
       format! "failed rule applications:",
       format.nested 2 $ format.unlines (n.failed_rapps.map to_fmt) ]
 
@@ -122,6 +131,12 @@ n.parent.is_none
 
 meta def is_unknown (n : node) : bool :=
 ¬ n.is_proven ∧ ¬ n.is_unprovable
+
+meta def has_no_unexpanded_rapp (n : node) : bool :=
+match n.regular_queue with
+| none := ff
+| some q := q.empty
+end
 
 end node
 
@@ -233,8 +248,7 @@ meta def with_rapp (id : rapp_id) (f : rapp → tree) (t : tree) : tree :=
 meta def modify_rapp (rid : rapp_id) (f : rapp → rapp) (t : tree) : tree :=
 t.with_rapp rid $ λ r, t.replace_rapp rid (f r)
 
-meta def insert_node (n : node) (t : tree) :
-  node_id × tree :=
+meta def insert_node (n : node) (t : tree) : node_id × tree :=
 let id := t.next_node_id in
 let t := { nodes := t.nodes.insert id n, next_node_id := id.succ, ..t} in
 match n.parent with
@@ -327,7 +341,7 @@ n.rapps.any $ λ id, t.with_rapp' id $ λ r, ¬ r.is_unprovable
 meta def set_unprovable : sum node_id rapp_id → tree → tree :=
 modify_up
   (λ id n t,
-    if t.node_has_provable_rapp n ∨ n.num_rules_todo > 0
+    if t.node_has_provable_rapp n ∨ ¬ n.has_no_unexpanded_rapp
       then (t, ff)
       else
         -- Mark node as unprovable.
