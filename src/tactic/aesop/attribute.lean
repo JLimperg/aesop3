@@ -49,7 +49,7 @@ meta def parser : lean.parser attr_config := do
   match rule_type with
   | some `norm := normalization <$> normalization_attr_config.parser
   | none := regular <$> regular_attr_config.parser
-  | some n := fail $ format! "unknown aesop attribute type: {n}"
+  | some n := fail $ format! "Unknown aesop attribute type: {n}"
   end
 
 end attr_config
@@ -81,7 +81,7 @@ meta def normalization_declaration_to_rule (decl : name) (c : normalization_attr
     s ← simp_lemmas.mk.add_simp decl <|> fail!
       "Cannot add {decl} as a norm rule for aesop. It must be a (conditional) equation or a tactic.",
     when c.penalty.is_some $ fail!
-      "Penalty annotation is not allowed for norm rules that are tactics.",
+      "Penalty annotation is not allowed for aesop norm equations (only for norm tactics).",
     pure $ rule_set_member.normalization_simp_lemmas s
   end
 
