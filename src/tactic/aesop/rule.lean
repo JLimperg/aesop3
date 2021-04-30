@@ -83,14 +83,14 @@ meta instance : has_to_format regular_rule :=
 ⟨regular_rule.to_fmt⟩
 
 meta def lt (r s : regular_rule) : Prop :=
-r.success_probability < s.success_probability
+r.success_probability > s.success_probability
 
 meta instance : has_lt regular_rule :=
 ⟨regular_rule.lt⟩
 
 meta instance :
   decidable_rel ((<) : regular_rule → regular_rule → Prop) :=
-λ r s, (infer_instance : decidable (r.success_probability < s.success_probability))
+λ r s, (infer_instance : decidable (r.success_probability > s.success_probability))
 
 meta def ltb (r s : regular_rule) : bool :=
 r < s
@@ -139,11 +139,11 @@ meta def applicable_target_head_indexed_rules (rs : rule_index α) :
     then pure []
     else pure $ rs.by_target_head.find head.const_name
 
-meta def applicable_rules [has_lt α] [decidable_rel ((<) : α → α → Prop)]
-  (rs : rule_index α) : tactic (list α) := do
+meta def applicable_rules (lt : α → α → bool) (rs : rule_index α) :
+  tactic (list α) := do
   rs₁ ← applicable_target_head_indexed_rules rs,
   let rs₂ := rs.unindexed,
-  pure $ (rs₁ ++ rs₂).qsort (λ r s, r < s)
+  pure $ (rs₁ ++ rs₂).qsort lt
 
 end rule_index
 
@@ -203,10 +203,10 @@ rs.foldl (λ rs r, rs.add_rule_set_member r) empty
 
 meta def applicable_normalization_rules (rs : rule_set) :
   tactic (list normalization_rule) :=
-rs.normalization_rules.applicable_rules
+rs.normalization_rules.applicable_rules normalization_rule.ltb
 
 meta def applicable_regular_rules (rs : rule_set) : tactic (list regular_rule) :=
-rs.regular_rules.applicable_rules
+rs.regular_rules.applicable_rules regular_rule.ltb
 
 end rule_set
 
