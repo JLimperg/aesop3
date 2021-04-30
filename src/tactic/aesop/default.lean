@@ -4,7 +4,6 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
-import tactic.aesop.config
 import tactic.aesop.search
 
 /-!
@@ -17,7 +16,7 @@ export aesop (aesop)
 
 namespace interactive
 
-open interactive
+open interactive (parse)
 
 meta def aesop : parse aesop.config.parser → tactic unit :=
 tactic.aesop.aesop
@@ -51,7 +50,5 @@ lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
 meta def test_norm_tactic : tactic unit := `[try { rw [even_or_odd_def] at * }]
 
 meta def test_regular_tactic : tactic unit := `[apply Odd.plus_two]
-
-set_option trace.aesop.steps true
 
 example : even_or_odd 3 := by aesop rules: [test_regular_tactic 50], norm: [test_norm_tactic]
