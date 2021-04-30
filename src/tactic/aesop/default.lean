@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Authors: Jannis Limperg
 -/
 
+import tactic.aesop.config
 import tactic.aesop.search
 
 /-!
@@ -12,12 +13,16 @@ import tactic.aesop.search
 
 namespace tactic
 
-meta def aesop : tactic unit :=
+export aesop (aesop)
+
+namespace interactive
+
+open interactive
+
+meta def aesop : parse aesop.config.parser → tactic unit :=
 tactic.aesop.aesop
 
-meta def interactive.aesop : tactic unit :=
-tactic.aesop.aesop
-
+end interactive
 end tactic
 
 /-!
@@ -36,19 +41,17 @@ inductive EvenOrOdd : ℕ → Prop
 | even {n} : Even n → EvenOrOdd n
 | odd {n} : Odd n → EvenOrOdd n
 
-attribute [aesop  50] EvenOrOdd.odd EvenOrOdd.even
-attribute [aesop 100] Even.zero Even.plus_two Odd.one
+attribute [aesop  50] EvenOrOdd.even
+attribute [aesop 100] EvenOrOdd.odd Even.zero Even.plus_two Odd.one
 
 def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
 
 lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
 
-@[aesop norm 50]
-meta def test_norm_tactic : tactic unit := `[try { simp [even_or_odd_def] at * }]
+meta def test_norm_tactic : tactic unit := `[try { rw [even_or_odd_def] at * }]
 
-@[aesop 50]
 meta def test_regular_tactic : tactic unit := `[apply Odd.plus_two]
 
 set_option trace.aesop.steps true
 
-example : even_or_odd 3 := by aesop
+example : even_or_odd 3 := by aesop rules: [test_regular_tactic 50], norm: [test_norm_tactic]

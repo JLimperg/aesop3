@@ -5,7 +5,7 @@ Authors: Jannis Limperg
 -/
 
 import data.list.sort
-import tactic.aesop.attribute
+import tactic.aesop.config
 import tactic.aesop.percent
 import tactic.aesop.priority_queue
 import tactic.aesop.tracing
@@ -320,8 +320,8 @@ meta def search (rs : rule_set) : tactic unit := do
   s ← initial_state,
   search_loop rs s
 
-meta def aesop : tactic unit :=
-attr.registered_rule_set >>= search
+meta def aesop (c : config) : tactic unit :=
+c.rule_set >>= search
 
 end aesop
 end tactic

@@ -128,6 +128,13 @@ meta def add (r : α) : indexing_mode → rule_index α → rule_index α
 | unindexed rs :=
   { unindexed := r :: rs.unindexed, ..rs }
 
+meta def merge (rs₁ rs₂ : rule_index α) : rule_index α :=
+{ by_target_head := rs₁.by_target_head ++ rs₂.by_target_head,
+  unindexed := rs₁.unindexed ++ rs₂.unindexed }
+
+meta instance {α} : has_append (rule_index α) :=
+⟨merge⟩
+
 meta def from_list (rs : list (α × indexing_mode)) : rule_index α :=
 rs.foldl (λ rs ⟨r, imode⟩, rs.add r imode) empty
 
@@ -197,6 +204,15 @@ meta def add_rule_set_member : rule_set_member → rule_set → rule_set
   rs.add_normalization_simp_lemmas s
 | (rule_set_member.regular_rule r imode) rs :=
   rs.add_regular_rule r imode
+
+meta def merge (rs₁ rs₂ : rule_set) : rule_set :=
+{ regular_rules := rs₁.regular_rules ++ rs₂.regular_rules,
+  normalization_rules := rs₁.normalization_rules ++ rs₂.normalization_rules,
+  normalization_simp_lemmas :=
+    rs₁.normalization_simp_lemmas.join rs₂.normalization_simp_lemmas }
+
+meta instance : has_append rule_set :=
+⟨merge⟩
 
 meta def from_list (rs : list rule_set_member) : rule_set :=
 rs.foldl (λ rs r, rs.add_rule_set_member r) empty

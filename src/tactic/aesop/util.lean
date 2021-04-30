@@ -42,8 +42,14 @@ namespace rb_lmap
 meta def insert_list {α β} (m : rb_lmap α β) (a : α) (bs : list β) : rb_lmap α β :=
 match rb_map.find m a with
 | none := rb_map.insert m a bs
-| some bs' := rb_map.insert m a (bs ++ bs')
+| some bs' := rb_map.insert m a (bs' ++ bs)
 end
+
+meta def join {α β} (m₁ m₂ : rb_lmap α β) : rb_lmap α β :=
+m₂.fold m₁ $ λ a bs m, m.insert_list a bs
+
+meta instance {α β} : has_append (rb_lmap α β) :=
+⟨join⟩
 
 end rb_lmap
 end native
