@@ -340,12 +340,12 @@ n.rapps.any $ λ id, t.with_rapp' id $ λ r, ¬ r.is_unprovable
 
 meta def node_may_have_unexpanded_rapp (n : node) (t : tree) : bool :=
 ¬ n.has_no_unexpanded_unsafe_rule ∧
-n.rapps.all (λ id, t.with_rapp' id $ λ r, ¬ r.applied_rule.is_safe)
+¬ n.rapps.any (λ id, t.with_rapp' id $ λ r, r.applied_rule.is_safe)
 
 meta def set_unprovable : sum node_id rapp_id → tree → tree :=
 modify_up
   (λ id n t,
-    if node_may_have_unexpanded_rapp n t
+    if node_may_have_unexpanded_rapp n t ∨ node_has_provable_rapp n t
       then (t, ff)
       else
         -- Mark node as unprovable.
