@@ -7,6 +7,7 @@ Authors: Jannis Limperg
 import data.int.basic
 import tactic.aesop.percent
 import tactic.aesop.rule
+import tactic.aesop.rule_builder
 import tactic.aesop.util
 
 namespace tactic
@@ -33,19 +34,15 @@ meta def normalization_declaration_to_rule (decl : name) (c : normalization_rule
   tactic rule_set_member := do
   env ← get_env,
   d ← env.get decl,
-  match d.type with
-  | `(tactic unit) := do
-    tac ← eval_expr (tactic unit) d.value,
+  r ← rule_builder.normalization_default d,
+  match r with
+  | rule_builder_output.rule r imode :=
     pure $ rule_set_member.normalization_rule
-      { tac := tac,
-        description := decl.to_string,
-        penalty := c.penalty.get_or_else 1 }
-      indexing_mode.unindexed
-  | _ := do
-    s ← simp_lemmas.mk.add_simp decl <|> fail!
-      "Cannot add {decl} as a norm rule for aesop. It must be a (conditional) equation or a tactic.",
+      { penalty := c.penalty.get_or_else 0, ..r }
+      imode
+  | rule_builder_output.simp_lemmas s := do
     when c.penalty.is_some $ fail!
-      "Penalty annotation is not allowed for aesop norm equations (only for norm tactics).",
+      "Penalty annotation is not allowed for norm equations (only for norm tactics).",
     pure $ rule_set_member.normalization_simp_lemmas s
   end
 
@@ -69,22 +66,16 @@ meta def safe_declaration_to_rule (decl : name) (c : safe_rule_config) :
   d ← env.get decl,
   let penalty := c.penalty.get_or_else 0,
   let safety := c.safety.get_or_else safety.safe,
-  match d.type with
-  | `(tactic unit) := do
-    tac ← eval_expr (tactic unit) d.value,
+  r ← rule_builder.safe_default d,
+  match r with
+  | rule_builder_output.rule r imode :=
     pure $ rule_set_member.safe_rule
-      { tac := tac,
-        description := decl.to_string,
-        penalty := penalty,
-        safety := safety }
-      indexing_mode.unindexed
-  | _ := do
-    (r, imode) ← rule.apply_const decl,
-    let r : safe_rule :=
       { penalty := penalty,
         safety := safety,
-        ..r },
-    pure $ rule_set_member.safe_rule r imode
+        ..r }
+      imode
+  | rule_builder_output.simp_lemmas _ :=
+    fail! "aesop/safe_declaration_to_rule: internal error: unexpected rule builder output"
   end
 
 @[derive has_reflect]
@@ -99,24 +90,18 @@ meta def parser : lean.parser unsafe_rule_config := do
 
 end unsafe_rule_config
 
--- TODO major duplication
 meta def unsafe_declaration_to_rule (decl : name) (c : unsafe_rule_config) :
   tactic rule_set_member := do
   env ← get_env,
   d ← env.get decl,
-  match d.type with
-  | `(tactic unit) := do
-    tac ← eval_expr (tactic unit) d.value,
+  r ← rule_builder.unsafe_default d,
+  match r with
+  | rule_builder_output.rule r imode :=
     pure $ rule_set_member.unsafe_rule
-      { tac := tac,
-        description := decl.to_string,
-        success_probability := c.success_probability }
-      indexing_mode.unindexed
-  | _ := do
-    (r, imode) ← rule.apply_const decl,
-    let r : unsafe_rule :=
-      { success_probability := c.success_probability, ..r },
-    pure $ rule_set_member.unsafe_rule r imode
+      { success_probability := c.success_probability, ..r }
+      imode
+  | rule_builder_output.simp_lemmas _ :=
+    fail! "aesop/unsafe_declaration_to_rule: internal error: unexpected rule builder output"
   end
 
 /-! ## Attribute -/
@@ -186,7 +171,7 @@ list_of (rule_parser p)
 
 meta def parser : lean.parser config_clause :=
 interactive.with_desc
-  "(unsafe_rules: [id probability, ...] | safe_rules: [id penalty, ...] | norm: [id penalty, ...])" $ do
+  "(unsafe_rules: [id probability, ...] | safe_rules: [id penalty, ...] | norm_rules: [id penalty, ...])" $ do
   type ← ident,
   tk ":",
   match type with
@@ -196,7 +181,7 @@ interactive.with_desc
   | `safe_rules :=
     additional_rules <$>
       rules_parser (rule_config.safe <$> safe_rule_config.parser)
-  | `norm :=
+  | `norm_rules :=
     additional_rules <$>
       rules_parser (rule_config.normalization <$> normalization_rule_config.parser)
   | _ :=

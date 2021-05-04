@@ -21,8 +21,8 @@ TODO:
   the check for efficiency unless a 'debug mode' is toggled.
 
 - I'd like the goal mvars to have names that reflect the node they belong to,
-  e.g. `n0` for the mvar of node 0. The code contains an attempt to do this, but
-  it seems like the printing functions don't actually use the pretty mvar names
+  e.g. `n0` for the mvar of node 0. I made an attempt to do this earlier, but
+  it seemed like the printing functions don't actually use the pretty mvar names
   at all.
 -/
 

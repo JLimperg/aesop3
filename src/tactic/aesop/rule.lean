@@ -322,50 +322,5 @@ meta def applicable_safe_rules (rs : rule_set) : tactic (list safe_rule) :=
 rs.safe_rules.applicable_rules safe_rule.ltb
 
 end rule_set
-
-/-! ## Specific Rules -/
-
-namespace rule
-
-/-! ### Apply -/
-
--- TODO open_pis is unnecessarily slow here
-meta def conclusion_head_constant (e : expr) :
-  tactic (option name) := do
-  (_, conclusion) ← open_pis e,
-  let f := conclusion.get_app_fn,
-  pure $ if f.is_constant then some f.const_name else none
-
-meta def apply_indexing_mode (type : expr) : tactic indexing_mode := do
-  head_constant ← conclusion_head_constant type,
-  pure $
-    match head_constant with
-    | some c := index_target_head c
-    | none := unindexed
-    end
-
-/- Note: `e` may not be valid for the context in which this rule is going to be
-applied. A maybe okay protocol:
-- Add `e` as an additional hyp with a generated pretty name.
-- Look `e` up by pretty name when the tactic is executed. --/
-meta def apply (e : expr) : tactic (rule × indexing_mode) := do
-  type ← infer_type e,
-  imode ← apply_indexing_mode type,
-  let r : rule :=
-    { tac := tactic.apply e >> skip,
-      description := format! "apply {e}" },
-  pure (r, imode)
-
-meta def apply_const (n : name) : tactic (rule × indexing_mode) := do
-  n ← resolve_constant n,
-  env ← get_env,
-  d ← env.get n,
-  imode ← apply_indexing_mode d.type,
-  let r : rule :=
-    { tac := mk_const n >>= tactic.apply >> skip,
-      description := format! "apply {n}" },
-  pure (r, imode)
-
-end rule
 end aesop
 end tactic

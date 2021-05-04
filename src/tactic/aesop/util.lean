@@ -86,6 +86,12 @@ meta def set_pretty_name {elab} (n : name) : expr elab → expr elab
 | (elet _ type assignment body) := elet n type assignment body
 | e := e
 
+-- TODO open_pis is unnecessarily slow here
+meta def conclusion_head_constant (e : expr) : tactic (option name) := do
+  (_, conclusion) ← tactic.open_pis e,
+  let f := conclusion.get_app_fn,
+  pure $ if f.is_constant then some f.const_name else none
+
 end expr
 
 namespace lean

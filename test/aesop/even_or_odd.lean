@@ -20,17 +20,17 @@ inductive EvenOrOdd : ℕ → Prop
 
 attribute [aesop  50] EvenOrOdd.even EvenOrOdd.odd
 attribute [aesop 100] Even.zero Even.plus_two
+-- attribute [aesop 100] Odd.one Odd.plus_two
 
 def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
 
-lemma even_or_odd_def {n} : even_or_odd n = EvenOrOdd n := rfl
-
-meta def test_norm_tactic : tactic unit := `[try { rw [even_or_odd_def] at * }]
+meta def test_norm_tactic : tactic unit := `[try { rw [even_or_odd] at * }]
 
 set_option trace.aesop.steps true
+set_option trace.aesop.tree true
 
 example : even_or_odd 3 :=
-by aesop norm: [test_norm_tactic]
+by aesop norm_rules: [test_norm_tactic]
 
 example : even_or_odd 2 :=
-by aesop norm: [test_norm_tactic]
+by aesop norm_rules: [test_norm_tactic]
