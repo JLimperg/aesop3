@@ -91,7 +91,7 @@ meta structure node :=
 (cumulative_success_probability : percent)
 (rapps : list rapp_id)
 (failed_rapps : list regular_rule)
-(regular_queue : option (list regular_rule))
+(unsafe_queue : option (list unsafe_rule))
 (is_normal : bool)
 (is_proven : bool)
 (is_unprovable : bool)
@@ -101,8 +101,8 @@ namespace node
 
 protected meta def to_tactic_format (n : node) : tactic format := do
   goal ← format.of_goal n.goal,
-  regular_queue ←
-    match n.regular_queue with
+  unsafe_queue ←
+    match n.unsafe_queue with
     | some q := format.unlines <$> q.mmap pp
     | none := pure "<rules not yet selected>"
     end,
@@ -118,7 +118,7 @@ protected meta def to_tactic_format (n : node) : tactic format := do
       format! "is irrelevant: {n.is_irrelevant}\n",
       format! "successful rule applications: {n.rapps}\n",
       format! "rules waiting to be expanded:",
-      format.nested 2 regular_queue,
+      format.nested 2 unsafe_queue,
       format.line,
       format! "failed rule applications:",
       format.nested 2 $ format.unlines (n.failed_rapps.map to_fmt) ]
@@ -132,8 +132,8 @@ n.parent.is_none
 meta def is_unknown (n : node) : bool :=
 ¬ n.is_proven ∧ ¬ n.is_unprovable
 
-meta def has_no_unexpanded_rapp (n : node) : bool :=
-match n.regular_queue with
+meta def has_no_unexpanded_unsafe_rule (n : node) : bool :=
+match n.unsafe_queue with
 | none := ff
 | some q := q.empty
 end
@@ -210,7 +210,7 @@ meta def replace_node (id : node_id) (n : node) (t : tree) : tree :=
 meta def replace_rapp (rid : rapp_id) (r : rapp) (t : tree) : tree :=
 { rapps := t.rapps.insert rid r, ..t }
 
-meta def with_node' {α} [inhabited α] (id : node_id) (f : node → α) (t : tree) : α :=
+meta def with_node' {α} (id : node_id) (f : node → α) (t : tree) : α :=
 match t.get_node id with
 | some n := f n
 | none := undefined_core $
@@ -218,7 +218,7 @@ match t.get_node id with
 end
 
 meta def with_node (id : node_id) (f : node → tree) (t : tree) : tree :=
-@with_node' _ ⟨t⟩ id f t
+with_node' id f t
 
 meta def modify_node (id : node_id) (f : node → node) (t : tree) : tree :=
 t.with_node id $ λ n, t.replace_node id (f n)
@@ -235,7 +235,7 @@ end
 meta def get_rapps (ids : list rapp_id) (t : tree) : list (rapp_id × rapp) :=
 ids.filter_map $ λ id, (λ r, (id, r)) <$> t.get_rapp id
 
-meta def with_rapp' {α} [inhabited α] (id : rapp_id) (f : rapp → α) (t : tree) : α :=
+meta def with_rapp' {α} (id : rapp_id) (f : rapp → α) (t : tree) : α :=
 match t.get_rapp id with
 | some r := f r
 | none := undefined_core $
@@ -243,7 +243,7 @@ match t.get_rapp id with
 end
 
 meta def with_rapp (id : rapp_id) (f : rapp → tree) (t : tree) : tree :=
-@with_rapp' _ ⟨t⟩ id f t
+with_rapp' id f t
 
 meta def modify_rapp (rid : rapp_id) (f : rapp → rapp) (t : tree) : tree :=
 t.with_rapp rid $ λ r, t.replace_rapp rid (f r)
@@ -338,10 +338,14 @@ set_proven (sum.inr rid)
 meta def node_has_provable_rapp (n : node) (t : tree) : bool :=
 n.rapps.any $ λ id, t.with_rapp' id $ λ r, ¬ r.is_unprovable
 
+meta def node_may_have_unexpanded_rapp (n : node) (t : tree) : bool :=
+¬ n.has_no_unexpanded_unsafe_rule ∧
+n.rapps.all (λ id, t.with_rapp' id $ λ r, ¬ r.applied_rule.is_safe)
+
 meta def set_unprovable : sum node_id rapp_id → tree → tree :=
 modify_up
   (λ id n t,
-    if t.node_has_provable_rapp n ∨ ¬ n.has_no_unexpanded_rapp
+    if node_may_have_unexpanded_rapp n t
       then (t, ff)
       else
         -- Mark node as unprovable.

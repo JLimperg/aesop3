@@ -50,45 +50,88 @@ meta def normalization_declaration_to_rule (decl : name) (c : normalization_rule
   end
 
 @[derive has_reflect]
-structure regular_rule_config :=
+meta structure safe_rule_config :=
+(penalty : option ℤ)
+(safety : option safety)
+
+namespace safe_rule_config
+
+meta def parser : lean.parser safe_rule_config := do
+  penalty ← optional small_int,
+  safety ← optional safety.parser,
+  pure { penalty := penalty, safety := safety }
+
+end safe_rule_config
+
+meta def safe_declaration_to_rule (decl : name) (c : safe_rule_config) :
+  tactic rule_set_member := do
+  env ← get_env,
+  d ← env.get decl,
+  let penalty := c.penalty.get_or_else 0,
+  let safety := c.safety.get_or_else safety.safe,
+  match d.type with
+  | `(tactic unit) := do
+    tac ← eval_expr (tactic unit) d.value,
+    pure $ rule_set_member.safe_rule
+      { tac := tac,
+        description := decl.to_string,
+        penalty := penalty,
+        safety := safety }
+      indexing_mode.unindexed
+  | _ := do
+    (r, imode) ← rule.apply_const decl,
+    let r : safe_rule :=
+      { penalty := penalty,
+        safety := safety,
+        ..r },
+    pure $ rule_set_member.safe_rule r imode
+  end
+
+@[derive has_reflect]
+structure unsafe_rule_config :=
 (success_probability : percent)
 
-namespace regular_rule_config
+namespace unsafe_rule_config
 
-meta def parser : lean.parser regular_rule_config := do
+meta def parser : lean.parser unsafe_rule_config := do
   success_probability ← percent.parser,
   pure ⟨success_probability⟩
 
-end regular_rule_config
+end unsafe_rule_config
 
-meta def regular_declaration_to_rule (decl : name) (c : regular_rule_config) :
+-- TODO major duplication
+meta def unsafe_declaration_to_rule (decl : name) (c : unsafe_rule_config) :
   tactic rule_set_member := do
   env ← get_env,
   d ← env.get decl,
   match d.type with
   | `(tactic unit) := do
     tac ← eval_expr (tactic unit) d.value,
-    pure $ rule_set_member.regular_rule
+    pure $ rule_set_member.unsafe_rule
       { tac := tac,
         description := decl.to_string,
         success_probability := c.success_probability }
       indexing_mode.unindexed
   | _ := do
-    (r, imode) ← rule.apply_const decl c.success_probability,
-    pure $ rule_set_member.regular_rule r imode
+    (r, imode) ← rule.apply_const decl,
+    let r : unsafe_rule :=
+      { success_probability := c.success_probability, ..r },
+    pure $ rule_set_member.unsafe_rule r imode
   end
 
 /-! ## Attribute -/
 
 @[derive has_reflect]
 meta inductive rule_config : Type
-| normalization (c : normalization_rule_config) : rule_config
-| regular (c : regular_rule_config) : rule_config
+| normalization (c : normalization_rule_config)
+| unsafe (c : unsafe_rule_config)
+| safe (c : safe_rule_config)
 
 meta def declaration_to_rule (decl : name) :
   rule_config → tactic rule_set_member
 | (rule_config.normalization c) := normalization_declaration_to_rule decl c
-| (rule_config.regular c) := regular_declaration_to_rule decl c
+| (rule_config.unsafe c) := unsafe_declaration_to_rule decl c
+| (rule_config.safe c) := safe_declaration_to_rule decl c
 
 meta def declarations_to_rule_set (decls : list (name × rule_config)) :
   tactic rule_set := do
@@ -104,7 +147,8 @@ meta def attr_config_parser : lean.parser rule_config := do
   rule_type ← optional ident,
   match rule_type with
   | some `norm := rule_config.normalization <$> normalization_rule_config.parser
-  | none := rule_config.regular <$> regular_rule_config.parser
+  | some `safe := rule_config.safe <$> safe_rule_config.parser
+  | none := rule_config.unsafe <$> unsafe_rule_config.parser
   | some n := fail $ format! "Unknown aesop attribute type: {n}"
   end
 
@@ -141,13 +185,17 @@ meta def rules_parser {α} (p : lean.parser α) : lean.parser (list (name × α)
 list_of (rule_parser p)
 
 meta def parser : lean.parser config_clause :=
-interactive.with_desc "(rules: [id probability, ...] | norm: [id penalty, ...])" $ do
+interactive.with_desc
+  "(unsafe_rules: [id probability, ...] | safe_rules: [id penalty, ...] | norm: [id penalty, ...])" $ do
   type ← ident,
   tk ":",
   match type with
-  | `rules :=
+  | `unsafe_rules :=
     additional_rules <$>
-      rules_parser (rule_config.regular <$> regular_rule_config.parser)
+      rules_parser (rule_config.unsafe <$> unsafe_rule_config.parser)
+  | `safe_rules :=
+    additional_rules <$>
+      rules_parser (rule_config.safe <$> safe_rule_config.parser)
   | `norm :=
     additional_rules <$>
       rules_parser (rule_config.normalization <$> normalization_rule_config.parser)
