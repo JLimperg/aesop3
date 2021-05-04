@@ -292,8 +292,8 @@ meta def apply_first_safe_rule (rs : rule_set) (s : state) (id : node_id) :
 meta def apply_first_unsafe_rule (s : state) (id : node_id) :
   tactic state := do
   n ← s.search_tree.get_node' id "aesop/expand_node: internal error: ",
-  some (rule :: rules) ← pure n.unsafe_queue | fail!
-    "aesop/expand_node: internal error: node {id} has no applicable rules",
+  some (rule :: rules) ← pure n.unsafe_queue
+    | pure $ s.modify_search_tree $ λ t, t.set_node_unprovable id,
   trace $ format! "applying rule: {rule}",
   let s := s.modify_search_tree $ λ t,
     t.replace_node id { unsafe_queue := rules, ..n },
