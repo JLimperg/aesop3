@@ -338,6 +338,7 @@ meta def finish_if_proven (s : state) : tactic bool := do
     | pure ff,
   trace "=====================================================================",
   trace "root node is proven, extracting proof",
+  trace_tree s.search_tree,
   s.search_tree.link_proofs,
   prf ← s.search_tree.extract_proof,
   exact prf,
@@ -345,7 +346,7 @@ meta def finish_if_proven (s : state) : tactic bool := do
 
 private meta def search_loop (rs : rule_set) : state → tactic unit := λ s, do
   ff ← pure $ s.search_tree.root_node_is_unprovable
-    | fail "aesop: failed to prove the goal",
+    | trace_tree s.search_tree >> fail "aesop: failed to prove the goal",
   done ← finish_if_proven s,
   when ¬ done $ expand rs s >>= search_loop
 
