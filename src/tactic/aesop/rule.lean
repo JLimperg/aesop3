@@ -85,15 +85,6 @@ protected meta def to_fmt : safety → format
 meta instance : has_to_format safety :=
 ⟨safety.to_fmt⟩
 
-protected meta def parser : lean.parser safety :=
-interactive.with_desc "safe | almost_safe" $ do
-  i ← lean.parser.ident,
-  match i with
-  | `safe := pure safe
-  | `almost_safe := pure almost_safe
-  | _ := failed
-  end
-
 end safety
 
 meta structure safe_rule extends rule :=

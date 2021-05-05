@@ -18,7 +18,7 @@ inductive EvenOrOdd : ℕ → Prop
 | even {n} : Even n → EvenOrOdd n
 | odd {n} : Odd n → EvenOrOdd n
 
-attribute [aesop  50] EvenOrOdd.even EvenOrOdd.odd
+attribute [aesop  50 (builder apply)] EvenOrOdd.even EvenOrOdd.odd
 attribute [aesop 100] Even.zero Even.plus_two
 -- attribute [aesop 100] Odd.one Odd.plus_two
 
@@ -26,11 +26,11 @@ def even_or_odd (n : ℕ) : Prop := EvenOrOdd n
 
 meta def test_norm_tactic : tactic unit := `[try { rw [even_or_odd] at * }]
 
-set_option trace.aesop.steps true
-set_option trace.aesop.tree true
-
 example : even_or_odd 3 :=
-by aesop norm_rules: [test_norm_tactic]
+begin
+  aesop (norm [test_norm_tactic 5 (builder tactic)])
+    (unsafe [Odd.one 100, Odd.plus_two 100]),
+end
 
 example : even_or_odd 2 :=
-by aesop norm_rules: [test_norm_tactic]
+by aesop (norm [test_norm_tactic]) -- (safe [EvenOrOdd.odd])
