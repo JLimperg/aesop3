@@ -33,4 +33,4 @@ begin
 end
 
 example : even_or_odd 2 :=
-by aesop (norm [test_norm_tactic]) -- (safe [EvenOrOdd.odd])
+by aesop (norm [test_norm_tactic]) -- (safe [EvenOrOdd.odd almost_safe])

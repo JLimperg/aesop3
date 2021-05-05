@@ -62,14 +62,29 @@ inductive rule_clause
 | builder (c : builder_clause)
 | safety (c : safety_clause)
 
-meta def clause_parser {α} (clauses : name_map (lean.parser α)) :
+meta def clause_parser {α}
+  (simple_clauses : name_map α)
+  (clauses : name_map (lean.parser α)) :
   lean.parser α :=
-with_desc "config-clause" $ brackets "(" ")" $ do
+with_desc "clause" $
+(do
+  i ← ident,
+  match simple_clauses.find i with
+  | some v := pure v
+  | none := failed
+  end)
+<|>
+(brackets "(" ")" $ do
   i ← ident,
   match clauses.find i with
   | some arg_parser := arg_parser
   | none := fail $ format! "Unknown clause: {i}"
-  end
+  end)
+
+meta def simple_rule_clauses : name_map rule_clause :=
+native.rb_map.of_list
+  [ (`safe, rule_clause.safety ⟨safety.safe⟩),
+    (`almost_safe, rule_clause.safety ⟨safety.almost_safe⟩) ]
 
 meta def rule_clauses : name_map (lean.parser rule_clause) :=
 native.rb_map.of_list
@@ -80,7 +95,7 @@ native.rb_map.of_list
 namespace rule_clause
 
 meta def parser : lean.parser rule_clause :=
-clause_parser rule_clauses
+clause_parser simple_rule_clauses rule_clauses
 
 end rule_clause
 
@@ -297,6 +312,9 @@ prod.mk <$> ident <*> p
 meta def rules_parser {α} (p : lean.parser α) : lean.parser (list (name × α)) :=
 list_of (rule_parser p)
 
+meta def simple_config_clauses : name_map config_clause :=
+native.rb_map.mk _ _
+
 meta def config_clauses : name_map (lean.parser config_clause) :=
 native.rb_map.of_list
   [ (`unsafe,
@@ -314,7 +332,7 @@ namespace config_clause
 meta def parser : lean.parser config_clause :=
 with_desc
   "((unsafe [id probability clause*, ...]) | (safe [id penalty clause*, ...]) | (norm [id penalty clause*, ...]))" $
-  clause_parser config_clauses
+  clause_parser simple_config_clauses config_clauses
 
 end config_clause
 
